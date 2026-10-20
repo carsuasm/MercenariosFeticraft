@@ -762,6 +762,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
+    // --- BUCLE DE IA LIMPIO: SEGUIMIENTO PRIMERO, TRABAJO POR PROXIMIDAD ---
     private void processMercenaryAIAndTimers() {
         try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid, npc_id, time_remaining, role FROM mercenaries WHERE status='ACTIVE'");
              ResultSet rs = ps.executeQuery()) {
@@ -791,33 +792,44 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     npc = CitizensAPI.getNPCRegistry().getById(npcId);
                 } catch (Exception ignored) {}
 
-                if (player != null && player.isOnline() && npc != null) {
+                if (player != null && player.isOnline() && npc != null && npc.isSpawned()) {
                     if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) {
-                        if (npc.isSpawned()) npc.despawn();
+                        npc.despawn();
                         continue;
-                    }
-
-                    if (!npc.isSpawned()) {
-                        npc.spawn(player.getLocation());
                     }
 
                     boolean isStaying = mercenaryStays.getOrDefault(uuid, false);
                     Navigator navigator = npc.getNavigator();
 
                     if (isStaying) {
-                        if (navigator.isNavigating()) {
-                            navigator.cancelNavigation();
-                        }
+                        if (navigator.isNavigating()) navigator.cancelNavigation();
                         continue;
                     }
 
-                    Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + (player != null ? player.getName() : "Mercenario"))));
+                    Location npcLoc = npc.getStoredLocation();
+                    Location playerLoc = player.getLocation();
 
-                    // --- COMBAT SYSTEM ---
+                    // Teletransporte si el jugador está muy lejos (> 25 bloques)
+                    if (!playerLoc.getWorld().equals(npcLoc.getWorld()) || playerLoc.distanceSquared(npcLoc) > 625.0) {
+                        npc.teleport(playerLoc, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN);
+                        continue;
+                    }
+
+                    double distanceToPlayerSq = playerLoc.distanceSquared(npcLoc);
+
+                    // 1. PRIORIDAD 1: SI EL JUGADOR SE ALEJA MÁS DE 6 BLOQUES, SEGUIRLO INMEDIATAMENTE
+                    if (distanceToPlayerSq > 36.0) {
+                        navigator.setTarget(player, false);
+                        continue;
+                    }
+
+                    Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
+
+                    // 2. PRIORIDAD 2: COMBATIR ENEMIGOS CERCANOS (< 4 bloques)
                     LivingEntity targetMonster = null;
-                    for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
+                    for (Entity entity : npcLoc.getWorld().getEntities()) {
                         if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
-                            if (entity.getLocation().distanceSquared(npc.getStoredLocation()) <= 16.0) {
+                            if (entity.getLocation().distanceSquared(npcLoc) <= 16.0) {
                                 targetMonster = (LivingEntity) entity;
                                 break;
                             }
@@ -845,7 +857,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         continue;
                     }
 
-                    // --- ROLE: MINER ---
+                    // 3. PRIORIDAD 3: TRABAJO POR PROXIMIDAD (Solo si está cerca del jugador)
                     if (role.equals("MINER")) {
                         boolean hasPickaxe = false;
                         if (inv != null) {
@@ -856,45 +868,34 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                                 }
                             }
                         }
-                        if (!hasPickaxe) continue;
-
-                        Location npcLoc = npc.getStoredLocation();
-                        Block targetBlock = null;
-
-                        for (int x = -5; x <= 5; x++) {
-                            for (int y = -3; y <= 3; y++) {
-                                for (int z = -5; z <= 5; z++) {
-                                    Block b = npcLoc.clone().add(x, y, z).getBlock();
-                                    String bName = b.getType().name();
-                                    if (bName.contains("ORE") || bName.contains("ANCIENT_DEBRIS")) {
-                                        targetBlock = b;
-                                        break;
+                        if (hasPickaxe) {
+                            Block minedBlock = null;
+                            for (int x = -3; x <= 3; x++) {
+                                for (int y = -2; y <= 2; y++) {
+                                    for (int z = -3; z <= 3; z++) {
+                                        Block b = npcLoc.clone().add(x, y, z).getBlock();
+                                        String bName = b.getType().name();
+                                        if (bName.contains("ORE") || bName.contains("ANCIENT_DEBRIS")) {
+                                            minedBlock = b;
+                                            break;
+                                        }
                                     }
+                                    if (minedBlock != null) break;
                                 }
-                                if (targetBlock != null) break;
+                                if (minedBlock != null) break;
                             }
-                            if (targetBlock != null) break;
-                        }
 
-                        if (targetBlock != null) {
-                            double distSq = npcLoc.distanceSquared(targetBlock.getLocation());
-                            if (distSq > 16.0) {
-                                navigator.setTarget(targetBlock.getLocation());
-                            } else {
-                                if (navigator.isNavigating()) navigator.cancelNavigation();
-                                Material minedType = targetBlock.getType();
-                                targetBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, targetBlock.getLocation().add(0.5, 0.5, 0.5), 8, 0.1, 0.1, 0.1, 0.0);
-                                targetBlock.getWorld().playSound(targetBlock.getLocation(), targetBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
-                                
-                                targetBlock.setType(Material.AIR);
+                            if (minedBlock != null) {
+                                Material minedType = minedBlock.getType();
+                                minedBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, minedBlock.getLocation().add(0.5, 0.5, 0.5), 8, 0.1, 0.1, 0.1, 0.0);
+                                minedBlock.getWorld().playSound(minedBlock.getLocation(), minedBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
+                                minedBlock.setType(Material.AIR);
                                 if (inv != null) inv.addItem(new ItemStack(minedType, 1));
                                 addXpToMercenary(uuid, 5);
+                                continue;
                             }
-                            continue;
                         }
-                    } 
-                    // --- ROLE: LUMBERJACK ---
-                    else if (role.equals("LUMBERJACK")) {
+                    } else if (role.equals("LUMBERJACK")) {
                         boolean hasAxe = false;
                         if (inv != null) {
                             for (ItemStack content : inv.getContents()) {
@@ -904,52 +905,38 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                                 }
                             }
                         }
-                        if (!hasAxe) continue;
-
-                        Location npcLoc = npc.getStoredLocation();
-                        Block blockToCut = null;
-                        
-                        for (int x = -5; x <= 5; x++) {
-                            for (int y = -2; y <= 8; y++) {
-                                for (int z = -5; z <= 5; z++) {
-                                    Block b = npcLoc.clone().add(x, y, z).getBlock();
-                                    String bName = b.getType().name();
-                                    if (bName.contains("LOG") || bName.contains("WOOD") || bName.contains("STEM") || bName.contains("HYPHAE") || bName.contains("STRIPPED_")) {
-                                        blockToCut = b;
-                                        break;
+                        if (hasAxe) {
+                            Block cutBlock = null;
+                            for (int x = -3; x <= 3; x++) {
+                                for (int y = -1; y <= 4; y++) {
+                                    for (int z = -3; z <= 3; z++) {
+                                        Block b = npcLoc.clone().add(x, y, z).getBlock();
+                                        String bName = b.getType().name();
+                                        if (bName.contains("LOG") || bName.contains("WOOD") || bName.contains("STEM") || bName.contains("HYPHAE") || bName.contains("STRIPPED_")) {
+                                            cutBlock = b;
+                                            break;
+                                        }
                                     }
+                                    if (cutBlock != null) break;
                                 }
-                                if (blockToCut != null) break;
+                                if (cutBlock != null) break;
                             }
-                            if (blockToCut != null) break;
-                        }
 
-                        if (blockToCut != null) {
-                            double distSq = npcLoc.distanceSquared(blockToCut.getLocation());
-                            if (distSq > 16.0) {
-                                navigator.setTarget(blockToCut.getLocation());
-                            } else {
-                                if (navigator.isNavigating()) navigator.cancelNavigation();
-                                Material cutType = blockToCut.getType();
-                                blockToCut.getWorld().spawnParticle(Particle.SMOKE_NORMAL, blockToCut.getLocation().add(0.5, 0.5, 0.5), 8, 0.1, 0.1, 0.1, 0.0);
-                                blockToCut.getWorld().playSound(blockToCut.getLocation(), blockToCut.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
-
-                                blockToCut.setType(Material.AIR);
+                            if (cutBlock != null) {
+                                Material cutType = cutBlock.getType();
+                                cutBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, cutBlock.getLocation().add(0.5, 0.5, 0.5), 8, 0.1, 0.1, 0.1, 0.0);
+                                cutBlock.getWorld().playSound(cutBlock.getLocation(), cutBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
+                                cutBlock.setType(Material.AIR);
                                 if (inv != null) inv.addItem(new ItemStack(cutType, 1));
                                 addXpToMercenary(uuid, 5);
+                                continue;
                             }
-                            continue;
                         }
                     }
 
-                    // --- SIGUIENDO AL JUGADOR ---
-                    if (player.getWorld().equals(npc.getStoredLocation().getWorld())) {
-                        double distanceSq = player.getLocation().distanceSquared(npc.getStoredLocation());
-                        if (distanceSq > 16.0 && !navigator.isNavigating()) {
-                            navigator.setTarget(player, false);
-                        } else if (distanceSq > 100.0) {
-                            npc.teleport(player.getLocation(), org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN);
-                        }
+                    // 4. SI NO HAY BLOQUES NI MONSTRUOS, MANTENERSE JUNTO AL JUGADOR
+                    if (distanceToPlayerSq > 9.0 && !navigator.isNavigating()) { // Si está a más de 3 bloques
+                        navigator.setTarget(player, false);
                     }
                 }
             }

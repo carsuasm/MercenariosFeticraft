@@ -148,6 +148,11 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
+            if (args.length > 0 && args[0].equalsIgnoreCase("reload")) {
+                loadConfigValues();
+                sender.sendMessage("[Mercenarios] Configuración recargada correctamente.");
+                return true;
+            }
             sender.sendMessage("Este comando solo puede usarlo un jugador.");
             return true;
         }
@@ -173,6 +178,14 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             } else if (args[0].equalsIgnoreCase("reset") || args[0].equalsIgnoreCase("borrar")) {
                 resetPlayerMercenaryData(player);
                 return true;
+            } else if (args[0].equalsIgnoreCase("reload") || args[0].equalsIgnoreCase("recargar")) {
+                if (!player.hasPermission("mercenarios.admin")) {
+                    message(player, "&cNo tienes permiso para recargar el plugin.");
+                    return true;
+                }
+                loadConfigValues();
+                message(player, "&a¡Configuración del plugin recargada con éxito!");
+                return true;
             }
         }
 
@@ -180,8 +193,9 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         message(player, "&f/mercenario contratar &7- Abre el menú de contratación");
         message(player, "&f/mercenario tiempo &7- Muestra el tiempo y nivel restante");
         message(player, "&f/mercenario reaparecer &7- Vuelve a hacer aparecer a tu mercenario");
-        message(player, "&f/mercenario guardar &7- Guarda tu mercenario activo en un tótem (congela el tiempo)");
-        message(player, "&f/mercenario reset &7- Borra tu mercenario de la base de datos para empezar de cero");
+        message(player, "&f/mercenario guardar &7- Guarda tu mercenario activo en un tótem");
+        message(player, "&f/mercenario reload &7- Recarga la configuración del plugin");
+        message(player, "&f/mercenario reset &7- Borra tu mercenario de la base de datos");
         return true;
     }
 
@@ -799,11 +813,11 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + (player != null ? player.getName() : "Mercenario"))));
 
-                    // --- 1. COMBAT SYSTEM (Solo si hay un monstruo muy cerca, < 4 bloques) ---
+                    // --- COMBAT SYSTEM ---
                     LivingEntity targetMonster = null;
                     for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
                         if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
-                            if (entity.getLocation().distanceSquared(npc.getStoredLocation()) <= 16.0) { // Reducido a 4 bloques para no interrumpir trabajos
+                            if (entity.getLocation().distanceSquared(npc.getStoredLocation()) <= 16.0) {
                                 targetMonster = (LivingEntity) entity;
                                 break;
                             }
@@ -831,7 +845,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         continue;
                     }
 
-                    // --- 2. ROLE: MINER ---
+                    // --- ROLE: MINER ---
                     if (role.equals("MINER")) {
                         boolean hasPickaxe = false;
                         if (inv != null) {
@@ -863,7 +877,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
 
                         if (targetBlock != null) {
-                            // Si está lejos, camina hacia él. Si ya está cerca, rómpelo directamente.
                             double distSq = npcLoc.distanceSquared(targetBlock.getLocation());
                             if (distSq > 16.0) {
                                 navigator.setTarget(targetBlock.getLocation());
@@ -880,7 +893,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             continue;
                         }
                     } 
-                    // --- 3. ROLE: LUMBERJACK ---
+                    // --- ROLE: LUMBERJACK ---
                     else if (role.equals("LUMBERJACK")) {
                         boolean hasAxe = false;
                         if (inv != null) {
@@ -929,7 +942,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
                     }
 
-                    // --- 4. SI NO HAY TRABAJO NI MOBS, SEGUIR AL JUGADOR ---
+                    // --- SIGUIENDO AL JUGADOR ---
                     if (player.getWorld().equals(npc.getStoredLocation().getWorld())) {
                         double distanceSq = player.getLocation().distanceSquared(npc.getStoredLocation());
                         if (distanceSq > 16.0 && !navigator.isNavigating()) {

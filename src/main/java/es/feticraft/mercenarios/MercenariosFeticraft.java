@@ -41,12 +41,15 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     private Connection database;
     private NamespacedKey mercenaryKey;
     
-    private final Map<UUID, Integer> activeMercenaries = new HashMap<>(); // UUID Jugador -> ID del NPC
-    private final Map<UUID, Boolean> mercenaryStays = new HashMap<>(); // UUID Jugador -> Si está quieto (true) o siguiendo (false)
-    private final Map<UUID, Inventory> mercenaryInventories = new HashMap<>(); // UUID Jugador -> Inventario virtual
+    private final Map<UUID, Integer> activeMercenaries = new HashMap<>(); 
+    private final Map<UUID, Boolean> mercenaryStays = new HashMap<>(); 
+    private final Map<UUID, Inventory> mercenaryInventories = new HashMap<>(); 
 
     private static final double HIRE_PRICE = 500.0;
     private static final long HIRE_DURATION_SECONDS = 86400L; // 24 horas
+    
+    // Cambia esto si tu mundo de survival se llama diferente
+    private static final String SURVIVAL_WORLD_NAME = "world";
 
     @Override
     public void onEnable() {
@@ -109,30 +112,59 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return true;
         }
 
-        if (args.length > 0 && args[0].equalsIgnoreCase("contratar")) {
-            hireMercenary(player);
-            return true;
+        if (args.length > 0) {
+            if (args[0].equalsIgnoreCase("contratar")) {
+                hireMercenary(player);
+                return true;
+            } else if (args[0].equalsIgnoreCase("tiempo") || args[0].equalsIgnoreCase("info")) {
+                checkMercenaryTime(player);
+                return true;
+            } else if (args[0].equalsIgnoreCase("reaparecer") || args[0].equalsIgnoreCase("revivir")) {
+                respawnMercenary(player);
+                return true;
+            }
         }
 
-        message(player, "&eUso: &f/mercenario contratar");
+        message(player, "&eUso de comandos:");
+        message(player, "&f/mercenario contratar &7- Contrata un mercenario");
+        message(player, "&f/mercenario tiempo &7- Muestra el tiempo restante");
+        message(player, "&f/mercenario reaparecer &7- Vuelve a hacer aparecer a tu mercenario si se borró");
         return true;
     }
 
     private void hireMercenary(Player player) {
         UUID uuid = player.getUniqueId();
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT expires_at FROM mercenaries WHERE player_uuid=?")) {
-            ps.setString(1, uuid.toString());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next() && rs.getLong("expires_at") > System.currentTimeMillis()) {
-                    message(player, "&cYa tienes un mercenario contratado activamente.");
-                    return;
-                }
-            }
-        } catch (SQLException e) {
-            message(player, "&cError al comprobar el estado.");
+        if (!player.getWorld().getName().equalsIgnoreCase(SURVIVAL_WORLD_NAME)) {
+            message(player, "&cSolo puedes contratar y usar mercenarios en el mundo de supervivencia (&e" + SURVIVAL_WORLD_NAME + "&c).");
             return;
         }
+
+        // Comprobar si tiene contrato activo y si el NPC realmente existe físicamente
+        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, expires_at, status FROM mercenaries WHERE player_uuid=?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long expiresAt = rs.getLong("expires_at");
+                    String status = rs.getString("status");
+                    int npcId = rs.getInt("npc_id");
+
+                    if (status.equalsIgnoreCase("ACTIVE") && expiresAt > System.currentTimeMillis()) {
+                        NPC existingNpc = CitizensAPI.getNPCRegistry().getById(npcId);
+                        if (existingNpc != null) {
+                            message(player, "&cYa tienes un mercenario activo. Usa &e/mercenario reaparecer &csi no lo ves.");
+                            return;
+                        } else {
+                            // Si el contrato sigue vigente pero el NPC fue borrado con /npc remove, lo limpiamos para permitir contratar uno nuevo o revivirló
+                            try (PreparedStatement delPs = database.prepareStatement("UPDATE mercenaries SET status='EXPIRED' WHERE player_uuid=?")) {
+                                delPs.setString(1, uuid.toString());
+                                delPs.executeUpdate();
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (SQLException ignored) {}
 
         if (!economy.has(player, HIRE_PRICE)) {
             message(player, "&cNo tienes suficiente dinero. Necesitas &e" + HIRE_PRICE + "$&c.");
@@ -170,6 +202,71 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         mercenaryInventories.put(uuid, Bukkit.createInventory(null, 9, color("&8Equipo de " + player.getName())));
         
         message(player, "&a¡Has contratado a tu mercenario con éxito!");
+    }
+
+    private void checkMercenaryTime(Player player) {
+        UUID uuid = player.getUniqueId();
+        try (PreparedStatement ps = database.prepareStatement("SELECT expires_at, status FROM mercenaries WHERE player_uuid=?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && rs.getString("status").equalsIgnoreCase("ACTIVE")) {
+                    long expiresAt = rs.getLong("expires_at");
+                    long timeLeft = expiresAt - System.currentTimeMillis();
+
+                    if (timeLeft > 0) {
+                        long hours = timeLeft / (1000 * 60 * 60);
+                        long minutes = (timeLeft / (1000 * 60)) % 60;
+                        message(player, "&eA tu mercenario le quedan &f" + hours + " horas y " + minutes + " minutos &ede contrato.");
+                        return;
+                    }
+                }
+            }
+        } catch (SQLException ignored) {}
+
+        message(player, "&cNo tienes ningún mercenario contratado en este momento.");
+    }
+
+    private void respawnMercenary(Player player) {
+        UUID uuid = player.getUniqueId();
+
+        if (!player.getWorld().getName().equalsIgnoreCase(SURVIVAL_WORLD_NAME)) {
+            message(player, "&cSolo puedes hacer reaparecer a tu mercenario en el mundo de supervivencia.");
+            return;
+        }
+
+        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, expires_at, status FROM mercenaries WHERE player_uuid=?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next() && rs.getString("status").equalsIgnoreCase("ACTIVE")) {
+                    long expiresAt = rs.getLong("expires_at");
+                    if (expiresAt > System.currentTimeMillis()) {
+                        int oldNpcId = rs.getInt("npc_id");
+                        NPC oldNpc = CitizensAPI.getNPCRegistry().getById(oldNpcId);
+                        if (oldNpc != null) {
+                            oldNpc.destroy();
+                        }
+
+                        // Crear un nuevo NPC en la posición actual del jugador
+                        NPC newNpc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario de " + player.getName()));
+                        newNpc.spawn(player.getLocation());
+
+                        // Actualizar ID en base de datos
+                        try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=? WHERE player_uuid=?")) {
+                            updatePs.setInt(1, newNpc.getId());
+                            updatePs.setString(2, uuid.toString());
+                            updatePs.executeUpdate();
+                        }
+
+                        activeMercenaries.put(uuid, newNpc.getId());
+                        mercenaryStays.put(uuid, false);
+                        message(player, "&a¡Tu mercenario ha reaparecido a tu lado!");
+                        return;
+                    }
+                }
+            }
+        } catch (SQLException ignored) {}
+
+        message(player, "&cNo tienes ningún contrato activo para reaparecer.");
     }
 
     @EventHandler
@@ -245,7 +342,18 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             Player player = Bukkit.getPlayer(uuid);
             NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
 
-            if (player != null && player.isOnline() && npc != null && npc.isSpawned()) {
+            if (player != null && player.isOnline() && npc != null) {
+                if (!player.getWorld().getName().equalsIgnoreCase(SURVIVAL_WORLD_NAME)) {
+                    if (npc.isSpawned()) {
+                        npc.despawn();
+                    }
+                    continue;
+                }
+
+                if (!npc.isSpawned()) {
+                    npc.spawn(player.getLocation());
+                }
+
                 boolean isStaying = mercenaryStays.getOrDefault(uuid, false);
                 Navigator navigator = npc.getNavigator();
 
@@ -296,6 +404,10 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
+
+        if (!player.getWorld().getName().equalsIgnoreCase(SURVIVAL_WORLD_NAME)) {
+            return;
+        }
 
         try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, expires_at FROM mercenaries WHERE player_uuid=? AND status='ACTIVE'")) {
             ps.setString(1, uuid.toString());

@@ -16,6 +16,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -27,6 +28,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -83,7 +85,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
         Bukkit.getScheduler().runTaskTimer(this, this::processMercenaryAIAndTimers, 20L, 20L);
 
-        getLogger().info("MercenariosFeticraft iniciado correctamente con todas las características.");
+        getLogger().info("MercenariosFeticraft iniciado correctamente.");
     }
 
     private void loadConfigValues() {
@@ -213,7 +215,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
         activeMercenaries.put(uuid, npcId);
         mercenaryStays.put(uuid, false);
-        mercenaryInventories.put(uuid, Bukkit.createInventory(null, 9, color("&8Equipo de " + player.getName())));
+        mercenaryInventories.put(uuid, Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
         mercenaryLevels.put(uuid, 1);
         mercenaryXp.put(uuid, 0);
         
@@ -337,55 +339,70 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         if (isOwner) {
             event.setCancelled(true);
 
-            // Sistema de curación y mantenimiento con comida
-            ItemStack itemInHand = player.getInventory().getItemInMainHand();
-            if (isFood(itemInHand.getType())) {
-                if (npc.getEntity() instanceof LivingEntity living) {
-                    double maxHealth = living.getAttribute(Attribute.GENERIC_MAX_HEALTH) != null ? living.getAttribute(Attribute.GENERIC_MAX_HEALTH).getValue() : 20.0;
-                    if (living.getHealth() < maxHealth) {
-                        living.setHealth(Math.min(maxHealth, living.getHealth() + 6.0));
-                        itemInHand.setAmount(itemInHand.getAmount() - 1);
-
-                        // Extender contrato 1 hora extra por cada comida
-                        try (PreparedStatement ps = database.prepareStatement("UPDATE mercenaries SET expires_at = expires_at + 3600000 WHERE player_uuid=?")) {
-                            ps.setString(1, uuid.toString());
-                            ps.executeUpdate();
-                        } catch (SQLException ignored) {}
-
-                        message(player, "&a¡Has curado a tu mercenario y extendido su contrato 1 hora!");
-                        return;
-                    } else {
-                        message(player, "&cTu mercenario ya tiene la vida al máximo.");
-                        return;
-                    }
-                }
+            // Si está agachado (Shift + Clic derecho) -> Abre el menú de órdenes (Seguir / Quieto)
+            if (player.isSneaking()) {
+                openControlMenu(player);
+                return;
             }
 
-            if (player.isSneaking()) {
+            // Clic derecho normal -> Abre su inventario de equipamiento estilo jugador
+            Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
+            player.openInventory(inv);
+            message(player, "&7Abriendo el inventario de equipamiento de tu mercenario...");
+        }
+    }
+
+    private void openControlMenu(Player player) {
+        Inventory gui = Bukkit.createInventory(null, 9, color("&8Control de Mercenario"));
+
+        boolean isStaying = mercenaryStays.getOrDefault(player.getUniqueId(), false);
+        ItemStack stayItem = new ItemStack(isStaying ? Material.RED_CONCRETE : Material.GREEN_CONCRETE);
+        setItemMeta(stayItem, isStaying ? "&cEstado: Quieto" : "&aEstado: Siguiendo", "&7Haz clic para alternar el comportamiento.");
+        gui.setItem(4, stayItem);
+
+        player.openInventory(gui);
+    }
+
+    private void setItemMeta(ItemStack item, String name, String lore) {
+        ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(color(name));
+            meta.setLore(java.util.Collections.singletonList(color(lore)));
+            item.setItemMeta(meta);
+        }
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        String title = event.getView().getTitle();
+
+        // Si es el menú de control rápido de órdenes
+        if (title.equals(color("&8Control de Mercenario"))) {
+            event.setCancelled(true);
+            if (!(event.getWhoClicked() instanceof Player player)) return;
+
+            if (event.getSlot() == 4) {
+                UUID uuid = player.getUniqueId();
                 boolean currentStay = mercenaryStays.getOrDefault(uuid, false);
                 boolean newStay = !currentStay;
                 mercenaryStays.put(uuid, newStay);
 
                 if (newStay) {
                     message(player, "&eTu mercenario se ha quedado &fquieto&e.");
+                    NPC npc = CitizensAPI.getNPCRegistry().getById(activeMercenaries.get(uuid));
+                    if (npc != null && npc.isSpawned()) {
+                        npc.getNavigator().cancelNavigation();
+                    }
                 } else {
                     message(player, "&aTu mercenario ha vuelto a &fseguirte&a.");
                 }
-            } else {
-                Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 9, color("&8Equipo de " + player.getName())));
-                player.openInventory(inv);
-                message(player, "&7Abriendo el equipo de tu mercenario...");
+                player.closeInventory();
             }
+            return;
         }
-    }
 
-    private boolean isFood(Material mat) {
-        return mat.isEdible() || mat == Material.GOLDEN_APPLE || mat == Material.ENCHANTED_GOLDEN_APPLE;
-    }
-
-    @EventHandler
-    public void onInventoryClick(InventoryClickEvent event) {
-        if (event.getView().getTitle().startsWith(color("&8Equipo de "))) {
+        // Si es el inventario de equipamiento del mercenario, permitimos colocar armadura y armas libremente
+        if (title.startsWith(color("&8Equipo de "))) {
             return;
         }
     }
@@ -425,12 +442,19 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 boolean isStaying = mercenaryStays.getOrDefault(uuid, false);
                 Navigator navigator = npc.getNavigator();
 
-                // Sistema de combate real e IA
+                if (isStaying) {
+                    if (navigator.isNavigating()) {
+                        navigator.cancelNavigation();
+                    }
+                    continue;
+                }
+
+                // BUSCAR ÚNICAMENTE MOBS HOSTILES (Monsters) cercanos en radio de 8 bloques
                 LivingEntity target = null;
                 for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
-                    if (entity instanceof LivingEntity living && !(entity instanceof Player) && !(entity.hasMetadata("NPC"))) {
-                        if (living.getLocation().distanceSquared(npc.getStoredLocation()) <= 64.0) {
-                            target = living;
+                    if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
+                        if (entity.getLocation().distanceSquared(npc.getStoredLocation()) <= 64.0) {
+                            target = (LivingEntity) entity;
                             break;
                         }
                     }
@@ -440,10 +464,26 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     navigator.setTarget(target, true);
                     if (npc.getEntity() instanceof LivingEntity npcEntity && npcEntity.getLocation().distanceSquared(target.getLocation()) <= 4.0) {
                         int level = getOrLoadLevel(uuid);
-                        double damage = 4.0 + (level * 1.5); // El daño aumenta con el nivel
+                        
+                        // Calcular daño base según el nivel y el arma que lleve en su inventario virtual
+                        double weaponBonus = 1.0;
+                        Inventory inv = mercenaryInventories.get(uuid);
+                        if (inv != null) {
+                            ItemStack handItem = inv.getItem(0); // Usamos el primer slot como arma principal
+                            if (handItem != null) {
+                                String typeName = handItem.getType().name();
+                                if (typeName.contains("NETHERITE_SWORD")) weaponBonus = 8.0;
+                                else if (typeName.contains("DIAMOND_SWORD")) weaponBonus = 7.0;
+                                else if (typeName.contains("IRON_SWORD")) weaponBonus = 6.0;
+                                else if (typeName.contains("STONE_SWORD")) weaponBonus = 5.0;
+                                else if (typeName.contains("WOODEN_SWORD") || typeName.contains("GOLD_SWORD")) weaponBonus = 4.0;
+                            }
+                        }
+
+                        double damage = weaponBonus + (level * 1.0);
                         target.damage(damage, npcEntity);
                     }
-                } else if (!isStaying) {
+                } else {
                     if (player.getWorld().equals(npc.getStoredLocation().getWorld()) &&
                             player.getLocation().distanceSquared(npc.getStoredLocation()) > 16.0) {
                         navigator.setTarget(player, false);
@@ -453,7 +493,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
-    // Sistema de ganancia de experiencia al matar entidades cercanas
     @EventHandler
     public void onEntityDeath(EntityDeathEvent event) {
         LivingEntity dead = event.getEntity();
@@ -461,7 +500,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
         Entity killer = dead.getKiller();
         if (killer == null) {
-            // Comprobar si murió cerca de un mercenario activo
             for (Map.Entry<UUID, Integer> entry : activeMercenaries.entrySet()) {
                 NPC npc = CitizensAPI.getNPCRegistry().getById(entry.getValue());
                 if (npc != null && npc.isSpawned() && npc.getStoredLocation().getWorld().equals(dead.getWorld())) {

@@ -327,14 +327,26 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT status FROM mercenaries WHERE player_uuid=?")) {
+        try (PreparedStatement ps = database.prepareStatement("SELECT status, npc_id FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     String status = rs.getString("status");
+                    int existingNpcId = rs.getInt("npc_id");
+
+                    // CORRECCIÓN DE SEGURIDAD: Si está marcado como ACTIVE pero el NPC ya no existe en Citizens, lo reseteamos a PENDING
                     if (status.equalsIgnoreCase("ACTIVE")) {
-                        message(player, "&cYa tienes un mercenario activo en el mundo.");
-                        return;
+                        NPC checkNpc = CitizensAPI.getNPCRegistry().getById(existingNpcId);
+                        if (checkNpc == null) {
+                            status = "PENDING";
+                            try (PreparedStatement fixPs = database.prepareStatement("UPDATE mercenaries SET status='PENDING', npc_id=-1 WHERE player_uuid=?")) {
+                                fixPs.setString(1, uuid.toString());
+                                fixPs.executeUpdate();
+                            }
+                        } else {
+                            message(player, "&cYa tienes un mercenario activo en el mundo.");
+                            return;
+                        }
                     }
 
                     item.setAmount(item.getAmount() - 1);
@@ -782,7 +794,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
 
                     if (blockToMine != null) {
-                        navigator.setTarget(blockToMine.getLocation()); // CORREGIDO AQUÍ
+                        navigator.setTarget(blockToMine.getLocation());
                         if (npcLoc.distanceSquared(blockToMine.getLocation()) <= 9.0) {
                             Material minedType = blockToMine.getType();
                             blockToMine.setType(Material.AIR);
@@ -828,7 +840,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
 
                     if (blockToCut != null) {
-                        navigator.setTarget(blockToCut.getLocation()); // CORREGIDO AQUÍ
+                        navigator.setTarget(blockToCut.getLocation());
                         if (npcLoc.distanceSquared(blockToCut.getLocation()) <= 9.0) {
                             Material cutType = blockToCut.getType();
                             blockToCut.setType(Material.AIR);

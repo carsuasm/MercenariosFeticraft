@@ -20,8 +20,11 @@ import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
+import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -29,6 +32,7 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -48,7 +52,7 @@ import java.util.UUID;
 public final class MercenariosFeticraft extends JavaPlugin implements Listener, CommandExecutor {
     private Economy economy;
     private Connection database;
-    private NamespacedKey mercenaryKey;
+    private NamespacedKey contractKey;
     
     private final Map<UUID, Integer> activeMercenaries = new HashMap<>(); 
     private final Map<UUID, Boolean> mercenaryStays = new HashMap<>(); 
@@ -64,7 +68,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         saveDefaultConfig();
         loadConfigValues();
 
-        mercenaryKey = new NamespacedKey(this, "mercenary_owner");
+        contractKey = new NamespacedKey(this, "mercenary_contract_item");
 
         if (!setupEconomy() || !openDatabase()) {
             getLogger().severe("No se pudo iniciar MercenariosFeticraft: revisa Vault y la base de datos.");
@@ -152,7 +156,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         UUID uuid = player.getUniqueId();
 
         if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) {
-            message(player, "&cSolo puedes contratar y usar mercenarios en el mundo de supervivencia (&e" + survivalWorldName + "&c).");
+            message(player, "&cSolo puedes contratar mercenarios en el mundo de supervivencia (&e" + survivalWorldName + "&c).");
             return;
         }
 
@@ -197,7 +201,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             meta.setDisplayName(color(name));
             List<String> loreList = new ArrayList<>();
             loreList.add(color(lore));
-            loreList.add(color("&7¡Haz clic para confirmar!"));
+            loreList.add(color("&7¡Haz clic para comprar tu tótem de invocación!"));
             meta.setLore(loreList);
             item.setItemMeta(meta);
         }
@@ -219,36 +223,141 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        Location loc = player.getLocation();
-        NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario Nivel 1 de " + player.getName()));
-        npc.spawn(loc);
+        ItemStack summonItem = new ItemStack(Material.TOTEM_OF_UNDYING);
+        ItemMeta meta = summonItem.getItemMeta();
+        if (meta != null) {
+            meta.setDisplayName(color("&a&lContrato de Mercenario"));
+            List<String> lore = new ArrayList<>();
+            lore.add(color("&7Haz clic derecho en el suelo"));
+            lore.add(color("&7para invocar a tu mercenario."));
+            meta.setLore(lore);
+            meta.getPersistentDataContainer().set(contractKey, PersistentDataType.BYTE, (byte) 1);
+            summonItem.setItemMeta(meta);
+        }
 
-        int npcId = npc.getId();
+        player.getInventory().addItem(summonItem);
+
         long expiresAt = System.currentTimeMillis() + (durationSeconds * 1000L);
-
-        try (PreparedStatement ps = database.prepareStatement("INSERT OR REPLACE INTO mercenaries(player_uuid, player_name, npc_id, expires_at, status, level, xp) VALUES(?,?,?,?, 'ACTIVE', 1, 0)")) {
+        try (PreparedStatement ps = database.prepareStatement("INSERT OR REPLACE INTO mercenaries(player_uuid, player_name, npc_id, expires_at, status, level, xp) VALUES(?,?,?,?, 'PENDING', 1, 0)")) {
             ps.setString(1, uuid.toString());
             ps.setString(2, player.getName());
-            ps.setInt(3, npcId);
+            ps.setInt(3, -1);
             ps.setLong(4, expiresAt);
             ps.executeUpdate();
         } catch (SQLException e) {
-            getLogger().severe("Error guardando mercenario: " + e.getMessage());
-            npc.destroy();
-            economy.depositPlayer(player, price);
-            message(player, "&cError crítico. Se te ha reembolsado el dinero.");
-            player.closeInventory();
+            getLogger().severe("Error guardando contrato pendiente: " + e.getMessage());
+        }
+
+        player.closeInventory();
+        message(player, "&a¡Has comprado tu contrato! Se te ha entregado un &eTótem de Invocación &aen el inventario.");
+    }
+
+    @EventHandler
+    public void onPlayerInteract(PlayerInteractEvent event) {
+        if (event.getAction() != Action.RIGHT_CLICK_BLOCK && event.getAction() != Action.RIGHT_CLICK_AIR) return;
+        if (event.getHand() != EquipmentSlot.HAND) return;
+
+        Player player = event.getPlayer();
+        ItemStack item = player.getInventory().getItemInMainHand();
+
+        if (item.getType() == Material.AIR || !item.hasItemMeta()) return;
+        if (!item.getItemMeta().getPersistentDataContainer().has(contractKey, PersistentDataType.BYTE)) return;
+
+        event.setCancelled(true);
+        UUID uuid = player.getUniqueId();
+
+        if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) {
+            message(player, "&cSolo puedes invocar a tu mercenario en el mundo de supervivencia (&e" + survivalWorldName + "&c).");
             return;
         }
 
-        activeMercenaries.put(uuid, npcId);
-        mercenaryStays.put(uuid, false);
-        mercenaryInventories.put(uuid, Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
-        mercenaryLevels.put(uuid, 1);
-        mercenaryXp.put(uuid, 0);
+        try (PreparedStatement ps = database.prepareStatement("SELECT expires_at, status FROM mercenaries WHERE player_uuid=?")) {
+            ps.setString(1, uuid.toString());
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    String status = rs.getString("status");
+                    long expiresAt = rs.getLong("expires_at");
+
+                    if (status.equalsIgnoreCase("ACTIVE")) {
+                        message(player, "&cYa tienes un mercenario activo en el mundo.");
+                        return;
+                    }
+
+                    if (expiresAt <= System.currentTimeMillis()) {
+                        message(player, "&cEste contrato ha expirado.");
+                        return;
+                    }
+
+                    item.setAmount(item.getAmount() - 1);
+
+                    Location loc = player.getLocation();
+                    NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario Nivel 1 de " + player.getName()));
+                    npc.spawn(loc);
+
+                    int npcId = npc.getId();
+
+                    try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=?, status='ACTIVE' WHERE player_uuid=?")) {
+                        updatePs.setInt(1, npcId);
+                        updatePs.setString(2, uuid.toString());
+                        updatePs.executeUpdate();
+                    }
+
+                    activeMercenaries.put(uuid, npcId);
+                    mercenaryStays.put(uuid, false);
+                    mercenaryInventories.put(uuid, Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
+                    mercenaryLevels.put(uuid, 1);
+                    mercenaryXp.put(uuid, 0);
+
+                    message(player, "&a¡Has invocado a tu mercenario con éxito!");
+                } else {
+                    message(player, "&cNo tienes ningún contrato pendiente en el sistema.");
+                }
+            }
+        } catch (SQLException e) {
+            getLogger().severe("Error invocando mercenario: " + e.getMessage());
+        }
+    }
+
+    // Sistema funcional de daño y mitigación por armadura cuando los monstruos atacan al NPC
+    @EventHandler
+    public void onEntityDamageByEntity(EntityDamageByEntityEvent event) {
+        Entity damaged = event.getEntity();
+        if (!CitizensAPI.getNPCRegistry().isNPC(damaged)) return;
+
+        NPC npc = CitizensAPI.getNPCRegistry().getNPC(damaged);
         
-        player.closeInventory();
-        message(player, "&a¡Has contratado a tu mercenario con éxito!");
+        // Buscar a qué jugador pertenece este NPC
+        UUID ownerUuid = null;
+        for (Map.Entry<UUID, Integer> entry : activeMercenaries.entrySet()) {
+            if (entry.getValue() == npc.getId()) {
+                ownerUuid = entry.getKey();
+                break;
+            }
+        }
+
+        if (ownerUuid != null) {
+            Inventory inv = mercenaryInventories.get(ownerUuid);
+            if (inv != null) {
+                double damage = event.getDamage();
+                double defenseMultiplier = 1.0;
+
+                // Revisar la armadura en el inventario para mitigar el daño realista
+                // Slots simulados de armadura (puedes ponerlos en los huecos superiores o ranuras estándar)
+                for (int i = 18; i < 22; i++) { // Usamos la última fila para armadura (o ranuras de inventario)
+                    ItemStack armor = inv.getItem(i);
+                    if (armor != null) {
+                        String name = armor.getType().name();
+                        if (name.contains("NETHERITE")) defenseMultiplier -= 0.20;
+                        else if (name.contains("DIAMOND")) defenseMultiplier -= 0.15;
+                        else if (name.contains("IRON")) defenseMultiplier -= 0.10;
+                        else if (name.contains("CHAINMAIL") || name.contains("GOLD") || name.contains("LEATHER")) defenseMultiplier -= 0.05;
+                    }
+                }
+
+                if (defenseMultiplier < 0.2) defenseMultiplier = 0.2; // Tope mínimo de daño
+                event.setDamage(damage * defenseMultiplier);
+            }
+        }
     }
 
     private void checkMercenaryTime(Player player) {
@@ -274,7 +383,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
         } catch (SQLException ignored) {}
 
-        message(player, "&cNo tienes ningún mercenario contratado en este momento.");
+        message(player, "&cNo tienes ningún mercenario activo en este momento.");
     }
 
     private void respawnMercenary(Player player) {
@@ -368,13 +477,11 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         if (isOwner) {
             event.setCancelled(true);
 
-            // Shift + Clic derecho -> Abre el panel de control principal desde el NPC
             if (player.isSneaking()) {
                 openControlMenu(player);
                 return;
             }
 
-            // Clic derecho normal -> Abre su inventario de equipamiento (armaduras y armas)
             Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
             player.openInventory(inv);
             message(player, "&7Abriendo el inventario de equipamiento de tu mercenario...");
@@ -386,12 +493,10 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
         boolean isStaying = mercenaryStays.getOrDefault(player.getUniqueId(), false);
         
-        // Botón 1 (Slot 3): Cambiar Estado Seguir/Quieto
         ItemStack stayItem = new ItemStack(isStaying ? Material.RED_CONCRETE : Material.GREEN_CONCRETE);
         setItemMeta(stayItem, isStaying ? "&cEstado: Quieto" : "&aEstado: Siguiendo", "&7Haz clic para alternar el comportamiento.");
         gui.setItem(3, stayItem);
 
-        // Botón 2 (Slot 5): Abrir inventario de equipamiento directamente desde la gestión
         ItemStack gearItem = new ItemStack(Material.IRON_CHESTPLATE);
         setItemMeta(gearItem, "&bInventario y Armadura", "&7Haz clic para abrir su equipo.");
         gui.setItem(5, gearItem);
@@ -412,7 +517,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     public void onInventoryClick(InventoryClickEvent event) {
         String title = event.getView().getTitle();
 
-        // 1. Menú de Contratación
         if (title.equals(color("&8Contratar Mercenario"))) {
             event.setCancelled(true);
             if (!(event.getWhoClicked() instanceof Player player)) return;
@@ -430,7 +534,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        // 2. Menú de Gestión y Configuración del NPC
         if (title.equals(color("&8Gestión de Mercenario"))) {
             event.setCancelled(true);
             if (!(event.getWhoClicked() instanceof Player player)) return;
@@ -460,7 +563,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        // 3. Inventario de equipamiento
         if (title.startsWith(color("&8Equipo de "))) {
             return;
         }
@@ -508,7 +610,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     continue;
                 }
 
-                // Combate exclusivo contra monstruos hostiles
                 LivingEntity target = null;
                 for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
                     if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
@@ -618,19 +719,21 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
-    @EventHandler
+    @EventHandler(ignoreCancelled = true)
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
         UUID uuid = player.getUniqueId();
 
         if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) return;
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, expires_at, level, xp FROM mercenaries WHERE player_uuid=? AND status='ACTIVE'")) {
+        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, expires_at, level, xp, status FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
+                    String status = rs.getString("status");
                     long expiresAt = rs.getLong("expires_at");
-                    if (expiresAt > System.currentTimeMillis()) {
+
+                    if (status.equalsIgnoreCase("ACTIVE") && expiresAt > System.currentTimeMillis()) {
                         int npcId = rs.getInt("npc_id");
                         int level = rs.getInt("level");
                         mercenaryLevels.put(uuid, level);
@@ -651,7 +754,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
                         activeMercenaries.put(uuid, npcId);
                         mercenaryStays.put(uuid, false);
-                    } else {
+                    } else if (expiresAt <= System.currentTimeMillis() && !status.equalsIgnoreCase("EXPIRED")) {
                         expireMercenary(uuid, rs.getInt("npc_id"));
                     }
                 }
@@ -670,6 +773,10 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
             if (npc != null && npc.isSpawned()) {
                 npc.despawn();
+            }
+            // Destruir el NPC si el jugador se desconecta para mantener limpio el mundo
+            if (npc != null) {
+                npc.destroy();
             }
         }
     }

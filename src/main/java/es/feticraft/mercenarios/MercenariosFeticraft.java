@@ -459,7 +459,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             updatePs.executeUpdate();
         } catch (SQLException ignored) {}
 
-        mercenaryStays.remove(uuid);
+        mercenaryStays.put(uuid, false);
         mercenaryRoles.put(uuid, "FIGHTER");
         mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
         mercenaryLevels.put(uuid, 1);
@@ -762,7 +762,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
-    // --- BUCLE DE IA: RANGO AMPLIADO A 6 BLOQUES DE FORMA FLUIDA ---
+    // --- BUCLE DE IA: RANGO DE 8 BLOQUES OPTIMIZADO CON ALCANCE DIRECTO ---
     private void processMercenaryAIAndTimers() {
         try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid, npc_id, time_remaining, role FROM mercenaries WHERE status='ACTIVE'");
              ResultSet rs = ps.executeQuery()) {
@@ -817,19 +817,19 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     double distanceToPlayerSq = playerLoc.distanceSquared(npcLoc);
 
-                    // 1. PRIORIDAD 1: SI EL JUGADOR SE ALEJA MÁS DE 7 BLOQUES, SEGUIRLO INMEDIATAMENTE
-                    if (distanceToPlayerSq > 49.0) {
+                    // 1. PRIORIDAD 1: SI EL JUGADOR SE ALEJA MÁS DE 8 BLOQUES, SEGUIRLO INMEDIATAMENTE
+                    if (distanceToPlayerSq > 64.0) {
                         navigator.setTarget(player, false);
                         continue;
                     }
 
                     Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
 
-                    // 2. PRIORIDAD 2: COMBATIR ENEMIGOS CERCANOS (< 4 bloques)
+                    // 2. PRIORIDAD 2: COMBATIR ENEMIGOS CERCANOS (< 5 bloques)
                     LivingEntity targetMonster = null;
                     for (Entity entity : npcLoc.getWorld().getEntities()) {
                         if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
-                            if (entity.getLocation().distanceSquared(npcLoc) <= 16.0) {
+                            if (entity.getLocation().distanceSquared(npcLoc) <= 25.0) {
                                 targetMonster = (LivingEntity) entity;
                                 break;
                             }
@@ -857,7 +857,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         continue;
                     }
 
-                    // 3. PRIORIDAD 3: TRABAJO (RANGO AMPLIADO A 6 BLOQUES)
+                    // 3. PRIORIDAD 3: TRABAJO CON ALCANCE AMPLIADO A 8 BLOQUES (Sin rutas que bloqueen)
                     if (role.equals("MINER")) {
                         boolean hasPickaxe = false;
                         if (inv != null) {
@@ -870,9 +870,9 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
                         if (hasPickaxe) {
                             Block minedBlock = null;
-                            for (int x = -6; x <= 6; x++) {
-                                for (int y = -2; y <= 3; y++) {
-                                    for (int z = -6; z <= 6; z++) {
+                            for (int x = -8; x <= 8; x++) {
+                                for (int y = -3; y <= 3; y++) {
+                                    for (int z = -8; z <= 8; z++) {
                                         Block b = npcLoc.clone().add(x, y, z).getBlock();
                                         String bName = b.getType().name();
                                         if (bName.contains("ORE") || bName.contains("ANCIENT_DEBRIS")) {
@@ -886,18 +886,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             }
 
                             if (minedBlock != null) {
-                                double distToBlockSq = npcLoc.distanceSquared(minedBlock.getLocation());
-                                if (distToBlockSq <= 6.25) { // Si ya está a menos de 2.5 bloques, minar
-                                    if (navigator.isNavigating()) navigator.cancelNavigation();
-                                    Material minedType = minedBlock.getType();
-                                    minedBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, minedBlock.getLocation().add(0.5, 0.5, 0.5), 8, 0.1, 0.1, 0.1, 0.0);
-                                    minedBlock.getWorld().playSound(minedBlock.getLocation(), minedBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
-                                    minedBlock.setType(Material.AIR);
-                                    if (inv != null) inv.addItem(new ItemStack(minedType, 1));
-                                    addXpToMercenary(uuid, 5);
-                                } else { // Si está entre 2.5 y 6 bloques, dar un par de pasos hacia el bloque
-                                    navigator.setTarget(minedBlock.getLocation());
-                                }
+                                if (navigator.isNavigating()) navigator.cancelNavigation();
+                                Material minedType = minedBlock.getType();
+                                minedBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, minedBlock.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0);
+                                minedBlock.getWorld().playSound(minedBlock.getLocation(), minedBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
+                                minedBlock.setType(Material.AIR);
+                                if (inv != null) inv.addItem(new ItemStack(minedType, 1));
+                                addXpToMercenary(uuid, 5);
                                 continue;
                             }
                         }
@@ -913,9 +908,9 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
                         if (hasAxe) {
                             Block cutBlock = null;
-                            for (int x = -6; x <= 6; x++) {
-                                for (int y = -1; y <= 6; y++) {
-                                    for (int z = -6; z <= 6; z++) {
+                            for (int x = -8; x <= 8; x++) {
+                                for (int y = -2; y <= 8; y++) {
+                                    for (int z = -8; z <= 8; z++) {
                                         Block b = npcLoc.clone().add(x, y, z).getBlock();
                                         String bName = b.getType().name();
                                         if (bName.contains("LOG") || bName.contains("WOOD") || bName.contains("STEM") || bName.contains("HYPHAE") || bName.contains("STRIPPED_")) {
@@ -929,18 +924,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             }
 
                             if (cutBlock != null) {
-                                double distToBlockSq = npcLoc.distanceSquared(cutBlock.getLocation());
-                                if (distToBlockSq <= 6.25) { // Si ya está a tiro (2.5 bloques), talar
-                                    if (navigator.isNavigating()) navigator.cancelNavigation();
-                                    Material cutType = cutBlock.getType();
-                                    cutBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, cutBlock.getLocation().add(0.5, 0.5, 0.5), 8, 0.1, 0.1, 0.1, 0.0);
-                                    cutBlock.getWorld().playSound(cutBlock.getLocation(), cutBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
-                                    cutBlock.setType(Material.AIR);
-                                    if (inv != null) inv.addItem(new ItemStack(cutType, 1));
-                                    addXpToMercenary(uuid, 5);
-                                } else { // Si está un poco retirado, dar pasos hacia la madera
-                                    navigator.setTarget(cutBlock.getLocation());
-                                }
+                                if (navigator.isNavigating()) navigator.cancelNavigation();
+                                Material cutType = cutBlock.getType();
+                                cutBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, cutBlock.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0);
+                                cutBlock.getWorld().playSound(cutBlock.getLocation(), cutBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
+                                cutBlock.setType(Material.AIR);
+                                if (inv != null) inv.addItem(new ItemStack(cutType, 1));
+                                addXpToMercenary(uuid, 5);
                                 continue;
                             }
                         }

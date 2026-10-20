@@ -78,7 +78,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
 
         if (Bukkit.getPluginManager().getPlugin("Citizens") == null) {
-            getLogger().severe("¡Citizens não está instalado! El plugin se deshabilitará.");
+            getLogger().severe("¡Citizens no está instalado! El plugin se deshabilitará.");
             Bukkit.getPluginManager().disablePlugin(this);
             return;
         }
@@ -112,14 +112,24 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             database = DriverManager.getConnection("jdbc:sqlite:" + new File(getDataFolder(), "mercenarios.db").getAbsolutePath());
             try (Statement st = database.createStatement()) {
                 st.execute("PRAGMA foreign_keys=ON");
-                st.execute("CREATE TABLE IF NOT EXISTS mercenaries (player_uuid TEXT PRIMARY KEY, player_name TEXT NOT NULL, npc_id INTEGER NOT NULL, time_remaining INTEGER NOT NULL, status TEXT NOT NULL, level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, role TEXT DEFAULT 'FIGHTER')");
+                st.execute("CREATE TABLE IF NOT EXISTS mercenaries (" +
+                        "player_uuid TEXT PRIMARY KEY, " +
+                        "player_name TEXT NOT NULL, " +
+                        "npc_id INTEGER NOT NULL, " +
+                        "time_remaining INTEGER NOT NULL, " +
+                        "status TEXT NOT NULL, " +
+                        "level INTEGER DEFAULT 1, " +
+                        "xp INTEGER DEFAULT 0, " +
+                        "role TEXT DEFAULT 'FIGHTER', " +
+                        "expires_at INTEGER DEFAULT 0)");
                 
-                // Asegurar columnas por si la tabla ya existía de versiones anteriores
+                // Asegurar columnas y evitar fallos de restricciones antiguas
                 try { st.execute("ALTER TABLE mercenaries ADD COLUMN time_remaining INTEGER DEFAULT 0;"); } catch (SQLException ignored) {}
                 try { st.execute("ALTER TABLE mercenaries ADD COLUMN status TEXT DEFAULT 'PENDING';"); } catch (SQLException ignored) {}
                 try { st.execute("ALTER TABLE mercenaries ADD COLUMN level INTEGER DEFAULT 1;"); } catch (SQLException ignored) {}
                 try { st.execute("ALTER TABLE mercenaries ADD COLUMN xp INTEGER DEFAULT 0;"); } catch (SQLException ignored) {}
                 try { st.execute("ALTER TABLE mercenaries ADD COLUMN role TEXT DEFAULT 'FIGHTER';"); } catch (SQLException ignored) {}
+                try { st.execute("ALTER TABLE mercenaries ADD COLUMN expires_at INTEGER DEFAULT 0;"); } catch (SQLException ignored) {}
             }
             return true;
         } catch (Exception e) {
@@ -231,7 +241,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         ItemStack summonItem = createSummonTotem(durationSeconds);
         player.getInventory().addItem(summonItem);
 
-        try (PreparedStatement ps = database.prepareStatement("INSERT OR REPLACE INTO mercenaries(player_uuid, player_name, npc_id, time_remaining, status, level, xp, role) VALUES(?,?,?,?, 'PENDING', 1, 0, 'FIGHTER')")) {
+        try (PreparedStatement ps = database.prepareStatement("INSERT OR REPLACE INTO mercenaries(player_uuid, player_name, npc_id, time_remaining, status, level, xp, role, expires_at) VALUES(?,?,?,?, 'PENDING', 1, 0, 'FIGHTER', 0)")) {
             ps.setString(1, uuid.toString());
             ps.setString(2, player.getName());
             ps.setInt(3, -1);
@@ -531,7 +541,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
         } catch (SQLException ignored) {}
 
-        message(player, "&cNo tienes ningún mercenario activo en el mundo para reaparecer.");
+        message(player, "&cNo tienes ningún contrato registrado para reaparecer.");
     }
 
     private int getOrLoadLevel(UUID uuid) {

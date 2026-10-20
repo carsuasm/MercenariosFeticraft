@@ -9,6 +9,7 @@ import org.bukkit.ChatColor;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
+import org.bukkit.Particle;
 import org.bukkit.block.Block;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -895,7 +896,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             if (npcLoc.distanceSquared(targetBlock.getLocation()) <= 12.0) {
                                 int progress = miningProgress.getOrDefault(uuid, 0) + 1;
                                 
-                                targetBlock.getWorld().spawnParticle(org.bukkit.Particle.BLOCK, targetBlock.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0, targetBlock.getBlockData());
+                                targetBlock.getWorld().spawnParticle(Particle.SMOKE_NORMAL, targetBlock.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0);
                                 targetBlock.getWorld().playSound(targetBlock.getLocation(), targetBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
 
                                 if (progress >= 3) {
@@ -948,7 +949,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             if (npcLoc.distanceSquared(blockToCut.getLocation()) <= 16.0) {
                                 int progress = miningProgress.getOrDefault(uuid, 0) + 1;
 
-                                blockToCut.getWorld().spawnParticle(org.bukkit.Particle.BLOCK, blockToCut.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0, blockToCut.getBlockData());
+                                blockToCut.getWorld().spawnParticle(Particle.SMOKE_NORMAL, blockToCut.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0);
                                 blockToCut.getWorld().playSound(blockToCut.getLocation(), blockToCut.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
 
                                 if (progress >= 3) {

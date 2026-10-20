@@ -172,18 +172,32 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         message(player, "&a¡Has contratado a tu mercenario con éxito!");
     }
 
-    // --- NUEVO: Interacción directa con el NPC haciendo clic ---
     @EventHandler
     public void onNPCClick(NPCClickEvent event) {
         Player player = event.getClicker();
-        UUID uuid = player.getUniqueId();
         NPC npc = event.getNPC();
+        UUID uuid = player.getUniqueId();
 
-        // Comprobamos si este NPC es el mercenario de este jugador
+        boolean isOwner = false;
+        
         if (activeMercenaries.containsKey(uuid) && activeMercenaries.get(uuid) == npc.getId()) {
+            isOwner = true;
+        } else {
+            try (PreparedStatement ps = database.prepareStatement("SELECT 1 FROM mercenaries WHERE player_uuid=? AND npc_id=? AND status='ACTIVE'")) {
+                ps.setString(1, uuid.toString());
+                ps.setInt(2, npc.getId());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        isOwner = true;
+                        activeMercenaries.put(uuid, npc.getId());
+                    }
+                }
+            } catch (SQLException ignored) {}
+        }
+
+        if (isOwner) {
             event.setCancelled(true);
 
-            // Si está agachado (Shift + Clic derecho) -> Cambia el estado de Quieto / Seguir
             if (player.isSneaking()) {
                 boolean currentStay = mercenaryStays.getOrDefault(uuid, false);
                 boolean newStay = !currentStay;
@@ -195,7 +209,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     message(player, "&aTu mercenario ha vuelto a &fseguirte&a.");
                 }
             } else {
-                // Clic derecho normal -> Abre su inventario de equipamiento
                 Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 9, color("&8Equipo de " + player.getName())));
                 player.openInventory(inv);
                 message(player, "&7Abriendo el equipo de tu mercenario...");
@@ -206,7 +219,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         if (event.getView().getTitle().startsWith(color("&8Equipo de "))) {
-            // Permite modificar los objetos del inventario del mercenario libremente
             return;
         }
     }
@@ -218,7 +230,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             UUID uuid = entry.getKey();
             int npcId = entry.getValue();
 
-            // 1. Comprobar caducidad
             try (PreparedStatement ps = database.prepareStatement("SELECT expires_at FROM mercenaries WHERE player_uuid=? AND status='ACTIVE'")) {
                 ps.setString(1, uuid.toString());
                 try (ResultSet rs = ps.executeQuery()) {
@@ -231,7 +242,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 getLogger().warning("Error en temporizador: " + e.getMessage());
             }
 
-            // 2. IA de Combate y Seguimiento
             Player player = Bukkit.getPlayer(uuid);
             NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
 
@@ -239,7 +249,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 boolean isStaying = mercenaryStays.getOrDefault(uuid, false);
                 Navigator navigator = npc.getNavigator();
 
-                // Buscar objetivos hostiles cercanos en radio de 8 bloques
                 LivingEntity target = null;
                 for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
                     if (entity instanceof LivingEntity living && !(entity instanceof Player) && !(entity.hasMetadata("NPC"))) {

@@ -26,7 +26,6 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
-import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.Inventory;
@@ -170,11 +169,9 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    String status = rs.getString("status");
                     long timeRemaining = rs.getLong("time_remaining");
-
-                    if ((status.equalsIgnoreCase("ACTIVE") || status.equalsIgnoreCase("PENDING")) && timeRemaining > 0) {
-                        message(player, "&cYa tienes un contrato activo o guardado. Guárdalo o úsalo antes de comprar otro.");
+                    if (timeRemaining > 0) {
+                        message(player, "&cYa tienes un contrato registrado. Guárdalo o úsalo antes de comprar otro.");
                         return;
                     }
                 }
@@ -260,20 +257,24 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
     private void storeMercenaryToItem(Player player) {
         UUID uuid = player.getUniqueId();
-        int activeNpcId = -1;
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, time_remaining FROM mercenaries WHERE player_uuid=? AND status='ACTIVE'")) {
+        // Buscar si tiene un NPC activo en el mundo a través de Citizens
+        NPC foundNpc = null;
+        for (NPC npc : CitizensAPI.getNPCRegistry()) {
+            if (npc.data().has("owner") && npc.data().getString("owner").equals(uuid.toString())) {
+                foundNpc = npc;
+                break;
+            }
+        }
+
+        try (PreparedStatement ps = database.prepareStatement("SELECT time_remaining FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    activeNpcId = rs.getInt("npc_id");
                     long timeRemaining = rs.getLong("time_remaining");
 
-                    if (activeNpcId != -1) {
-                        NPC npc = CitizensAPI.getNPCRegistry().getById(activeNpcId);
-                        if (npc != null) {
-                            npc.destroy();
-                        }
+                    if (foundNpc != null) {
+                        foundNpc.destroy();
                     }
 
                     ItemStack totem = createSummonTotem(timeRemaining);
@@ -317,6 +318,14 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
+        // Comprobar si ya tiene un NPC en el mundo
+        for (NPC npc : CitizensAPI.getNPCRegistry()) {
+            if (npc.data().has("owner") && npc.data().getString("owner").equals(uuid.toString())) {
+                message(player, "&cYa tienes un mercenario activo en el mundo.");
+                return;
+            }
+        }
+
         long itemTimeRemaining = item.getItemMeta().getPersistentDataContainer().getOrDefault(timeLeftKey, PersistentDataType.LONG, 0L);
 
         if (itemTimeRemaining <= 0) {
@@ -325,53 +334,27 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT status, npc_id FROM mercenaries WHERE player_uuid=?")) {
-            ps.setString(1, uuid.toString());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    String status = rs.getString("status");
-                    int existingNpcId = rs.getInt("npc_id");
+        item.setAmount(item.getAmount() - 1);
 
-                    if (status.equalsIgnoreCase("ACTIVE")) {
-                        NPC checkNpc = CitizensAPI.getNPCRegistry().getById(existingNpcId);
-                        if (checkNpc == null) {
-                            try (PreparedStatement fixPs = database.prepareStatement("UPDATE mercenaries SET status='PENDING', npc_id=-1 WHERE player_uuid=?")) {
-                                fixPs.setString(1, uuid.toString());
-                                fixPs.executeUpdate();
-                            }
-                        } else {
-                            message(player, "&cYa tienes un mercenario activo en el mundo.");
-                            return;
-                        }
-                    }
+        Location loc = player.getLocation();
+        NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario de " + player.getName()));
+        npc.data().set("owner", uuid.toString());
+        npc.spawn(loc);
 
-                    item.setAmount(item.getAmount() - 1);
+        try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=?, status='ACTIVE', time_remaining=? WHERE player_uuid=?")) {
+            updatePs.setInt(1, npc.getId());
+            updatePs.setLong(2, itemTimeRemaining);
+            updatePs.setString(3, uuid.toString());
+            updatePs.executeUpdate();
+        } catch (SQLException ignored) {}
 
-                    Location loc = player.getLocation();
-                    NPC npc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario Nivel 1 de " + player.getName()));
-                    npc.spawn(loc);
+        mercenaryStays.put(uuid, false);
+        mercenaryRoles.put(uuid, "FIGHTER");
+        mercenaryInventories.put(uuid, Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
+        mercenaryLevels.put(uuid, 1);
+        mercenaryXp.put(uuid, 0);
 
-                    int npcId = npc.getId();
-
-                    try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=?, status='ACTIVE', time_remaining=? WHERE player_uuid=?")) {
-                        updatePs.setInt(1, npcId);
-                        updatePs.setLong(2, itemTimeRemaining);
-                        updatePs.setString(3, uuid.toString());
-                        updatePs.executeUpdate();
-                    }
-
-                    mercenaryStays.put(uuid, false);
-                    mercenaryRoles.put(uuid, "FIGHTER");
-                    mercenaryInventories.put(uuid, Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
-                    mercenaryLevels.put(uuid, 1);
-                    mercenaryXp.put(uuid, 0);
-
-                    message(player, "&a¡Has invocado a tu mercenario! El temporizador ha vuelto a correr.");
-                }
-            }
-        } catch (SQLException e) {
-            getLogger().severe("Error invocando mercenario: " + e.getMessage());
-        }
+        message(player, "&a¡Has invocado a tu mercenario! El temporizador ha vuelto a correr.");
     }
 
     @EventHandler
@@ -380,37 +363,27 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         if (!CitizensAPI.getNPCRegistry().isNPC(damaged)) return;
 
         NPC npc = CitizensAPI.getNPCRegistry().getNPC(damaged);
-        
-        UUID ownerUuid = null;
-        try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid FROM mercenaries WHERE npc_id=? AND status='ACTIVE'")) {
-            ps.setInt(1, npc.getId());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    ownerUuid = UUID.fromString(rs.getString("player_uuid"));
+        if (!npc.data().has("owner")) return;
+
+        UUID ownerUuid = UUID.fromString(npc.data().getString("owner"));
+        Inventory inv = mercenaryInventories.get(ownerUuid);
+        if (inv != null) {
+            double damage = event.getDamage();
+            double defenseMultiplier = 1.0;
+
+            for (int i = 18; i < 22; i++) {
+                ItemStack armor = inv.getItem(i);
+                if (armor != null) {
+                    String name = armor.getType().name();
+                    if (name.contains("NETHERITE")) defenseMultiplier -= 0.20;
+                    else if (name.contains("DIAMOND")) defenseMultiplier -= 0.15;
+                    else if (name.contains("IRON")) defenseMultiplier -= 0.10;
+                    else if (name.contains("CHAINMAIL") || name.contains("GOLD") || name.contains("LEATHER")) defenseMultiplier -= 0.05;
                 }
             }
-        } catch (SQLException ignored) {}
 
-        if (ownerUuid != null) {
-            Inventory inv = mercenaryInventories.get(ownerUuid);
-            if (inv != null) {
-                double damage = event.getDamage();
-                double defenseMultiplier = 1.0;
-
-                for (int i = 18; i < 22; i++) {
-                    ItemStack armor = inv.getItem(i);
-                    if (armor != null) {
-                        String name = armor.getType().name();
-                        if (name.contains("NETHERITE")) defenseMultiplier -= 0.20;
-                        else if (name.contains("DIAMOND")) defenseMultiplier -= 0.15;
-                        else if (name.contains("IRON")) defenseMultiplier -= 0.10;
-                        else if (name.contains("CHAINMAIL") || name.contains("GOLD") || name.contains("LEATHER")) defenseMultiplier -= 0.05;
-                    }
-                }
-
-                if (defenseMultiplier < 0.2) defenseMultiplier = 0.2;
-                event.setDamage(damage * defenseMultiplier);
-            }
+            if (defenseMultiplier < 0.2) defenseMultiplier = 0.2;
+            event.setDamage(damage * defenseMultiplier);
         }
     }
 
@@ -420,7 +393,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    String status = rs.getString("status");
                     long timeRemaining = rs.getLong("time_remaining");
                     int level = rs.getInt("level");
                     int xp = rs.getInt("xp");
@@ -432,7 +404,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         String roleName = role.equals("MINER") ? "Minero ⛏️" : (role.equals("LUMBERJACK") ? "Talador 🪓" : "Luchador ⚔️");
                         
                         message(player, "&eEstadísticas del Mercenario:");
-                        message(player, "&f- Estado: " + (status.equalsIgnoreCase("ACTIVE") ? "&aActivo en mundo" : "&eGuardado en Tótem (Pausado)"));
                         message(player, "&f- Rol: &b" + roleName);
                         message(player, "&f- Nivel: &a" + level + " &7(XP: " + xp + "/100)");
                         message(player, "&f- Tiempo restante: &e" + hours + "h " + minutes + "m");
@@ -453,25 +424,23 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, time_remaining, status FROM mercenaries WHERE player_uuid=?")) {
+        try (PreparedStatement ps = database.prepareStatement("SELECT time_remaining FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next() && rs.getString("status").equalsIgnoreCase("ACTIVE")) {
+                if (rs.next()) {
                     long timeRemaining = rs.getLong("time_remaining");
-                    int oldNpcId = rs.getInt("npc_id");
-
                     if (timeRemaining > 0) {
-                        if (oldNpcId != -1) {
-                            NPC oldNpc = CitizensAPI.getNPCRegistry().getById(oldNpcId);
-                            if (oldNpc != null) {
-                                oldNpc.destroy();
+                        // Destruir anterior si existe
+                        for (NPC npc : CitizensAPI.getNPCRegistry()) {
+                            if (npc.data().has("owner") && npc.data().getString("owner").equals(uuid.toString())) {
+                                npc.destroy();
                             }
                         }
 
                         int level = getOrLoadLevel(uuid);
-                        Location spawnLoc = player.getLocation();
-                        NPC newNpc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario Nivel " + level + " de " + player.getName()));
-                        newNpc.spawn(spawnLoc);
+                        NPC newNpc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario de " + player.getName()));
+                        newNpc.data().set("owner", uuid.toString());
+                        newNpc.spawn(player.getLocation());
 
                         try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=? WHERE player_uuid=?")) {
                             updatePs.setInt(1, newNpc.getId());
@@ -486,7 +455,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
         } catch (SQLException ignored) {}
 
-        message(player, "&cNo tienes ningún mercenario activo en el mundo para reaparecer.");
+        message(player, "&cNo tienes ningún contrato registrado para reaparecer.");
     }
 
     private int getOrLoadLevel(UUID uuid) {
@@ -509,43 +478,32 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         if (event.getHand() != EquipmentSlot.HAND) return;
 
         Player player = event.getPlayer();
-        UUID uuid = player.getUniqueId();
-
-        long now = System.currentTimeMillis();
-        if (clickCooldown.containsKey(uuid) && now - clickCooldown.get(uuid) < 250) return;
-        clickCooldown.put(uuid, now);
-
         Entity clicked = event.getRightClicked();
         if (!CitizensAPI.getNPCRegistry().isNPC(clicked)) return;
 
         NPC npc = CitizensAPI.getNPCRegistry().getNPC(clicked);
-        boolean isOwner = false;
+        if (!npc.data().has("owner")) return;
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT 1 FROM mercenaries WHERE player_uuid=? AND npc_id=? AND status='ACTIVE'")) {
-            ps.setString(1, uuid.toString());
-            ps.setInt(2, npc.getId());
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) {
-                    isOwner = true;
-                }
-            }
-        } catch (SQLException ignored) {}
+        UUID ownerUuid = UUID.fromString(npc.data().getString("owner"));
+        if (!ownerUuid.equals(player.getUniqueId())) return;
 
-        if (isOwner) {
-            event.setCancelled(true);
+        event.setCancelled(true);
 
-            if (player.isSneaking()) {
-                openControlMenu(player);
-                return;
-            }
+        long now = System.currentTimeMillis();
+        if (clickCooldown.containsKey(player.getUniqueId()) && now - clickCooldown.get(player.getUniqueId()) < 250) return;
+        clickCooldown.put(player.getUniqueId(), now);
 
-            Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
-            player.openInventory(inv);
-            message(player, "&7Abriendo el inventario de equipamiento de tu mercenario...");
+        if (player.isSneaking()) {
+            openControlMenu(player, npc);
+            return;
         }
+
+        Inventory inv = mercenaryInventories.computeIfAbsent(player.getUniqueId(), k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
+        player.openInventory(inv);
+        message(player, "&7Abriendo el inventario de equipamiento de tu mercenario...");
     }
 
-    private void openControlMenu(Player player) {
+    private void openControlMenu(Player player, NPC npc) {
         Inventory gui = Bukkit.createInventory(null, 9, color("&8Gestión de Mercenario"));
 
         boolean isStaying = mercenaryStays.getOrDefault(player.getUniqueId(), false);
@@ -600,15 +558,10 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             if (!(event.getWhoClicked() instanceof Player player)) return;
 
             int slot = event.getSlot();
-            if (slot == 2) {
-                processHire(player, 3600L, 2000.0);
-            } else if (slot == 4) {
-                processHire(player, 21600L, 10000.0);
-            } else if (slot == 6) {
-                processHire(player, 43200L, 18000.0);
-            } else if (slot == 8) {
-                processHire(player, 86400L, 30000.0);
-            }
+            if (slot == 2) processHire(player, 3600L, 2000.0);
+            else if (slot == 4) processHire(player, 21600L, 10000.0);
+            else if (slot == 6) processHire(player, 43200L, 18000.0);
+            else if (slot == 8) processHire(player, 86400L, 30000.0);
             return;
         }
 
@@ -622,24 +575,16 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 boolean newStay = !currentStay;
                 mercenaryStays.put(uuid, newStay);
 
-                int npcId = -1;
-                try (PreparedStatement ps = database.prepareStatement("SELECT npc_id FROM mercenaries WHERE player_uuid=?")) {
-                    ps.setString(1, uuid.toString());
-                    try (ResultSet rs = ps.executeQuery()) {
-                        if (rs.next()) npcId = rs.getInt("npc_id");
-                    }
-                } catch (SQLException ignored) {}
-
-                if (newStay) {
-                    message(player, "&eTu mercenario se ha quedado &fquieto&e.");
-                    if (npcId != -1) {
-                        NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
-                        if (npc != null && npc.isSpawned()) {
-                            npc.getNavigator().cancelNavigation();
+                for (NPC npc : CitizensAPI.getNPCRegistry()) {
+                    if (npc.data().has("owner") && npc.data().getString("owner").equals(uuid.toString())) {
+                        if (newStay) {
+                            message(player, "&eTu mercenario se ha quedado &fquieto&e.");
+                            if (npc.isSpawned()) npc.getNavigator().cancelNavigation();
+                        } else {
+                            message(player, "&aTu mercenario ha vuelto a &fseguirte&a.");
                         }
+                        break;
                     }
-                } else {
-                    message(player, "&aTu mercenario ha vuelto a &fseguirte&a.");
                 }
                 player.closeInventory();
             } else if (event.getSlot() == 3) {
@@ -678,194 +623,173 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
             return;
         }
-
-        if (title.startsWith(color("&8Equipo de "))) {
-            return;
-        }
     }
 
     private void processMercenaryAIAndTimers() {
-        long now = System.currentTimeMillis();
+        for (NPC npc : CitizensAPI.getNPCRegistry()) {
+            if (!npc.data().has("owner")) continue;
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid, npc_id, time_remaining, role FROM mercenaries WHERE status='ACTIVE'");
-             ResultSet rs = ps.executeQuery()) {
-            
-            while (rs.next()) {
-                UUID uuid = UUID.fromString(rs.getString("player_uuid"));
-                int npcId = rs.getInt("npc_id");
-                long timeRemaining = rs.getLong("time_remaining") - 1L;
-                String role = rs.getString("role");
+            UUID uuid = UUID.fromString(npc.data().getString("owner"));
+            Player player = Bukkit.getPlayer(uuid);
 
-                if (timeRemaining <= 0) {
-                    expireMercenary(uuid, npcId);
-                    continue;
-                } else {
-                    try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET time_remaining=? WHERE player_uuid=?")) {
-                        updatePs.setLong(1, timeRemaining);
-                        updatePs.setString(2, uuid.toString());
-                        updatePs.executeUpdate();
-                    }
-                }
+            // Descontar tiempo en base de datos
+            try (PreparedStatement ps = database.prepareStatement("SELECT time_remaining, role FROM mercenaries WHERE player_uuid=?")) {
+                ps.setString(1, uuid.toString());
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        long timeRemaining = rs.getLong("time_remaining") - 1L;
+                        String role = rs.getString("role");
 
-                Player player = Bukkit.getPlayer(uuid);
-                NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
-
-                if (player != null && player.isOnline() && npc != null) {
-                    if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) {
-                        if (npc.isSpawned()) npc.despawn();
-                        continue;
-                    }
-
-                    if (!npc.isSpawned()) {
-                        npc.spawn(player.getLocation());
-                    }
-
-                    boolean isStaying = mercenaryStays.getOrDefault(uuid, false);
-                    Navigator navigator = npc.getNavigator();
-
-                    if (isStaying) {
-                        if (navigator.isNavigating()) {
-                            navigator.cancelNavigation();
-                        }
-                        continue;
-                    }
-
-                    Inventory inv = mercenaryInventories.get(uuid);
-
-                    // Si no está quieto y no está ocupado con un objetivo, aseguramos que siga al jugador suavemente
-                    if (!navigator.isNavigating() && player.getWorld().equals(npc.getStoredLocation().getWorld()) &&
-                            player.getLocation().distanceSquared(npc.getStoredLocation()) > 16.0) {
-                        navigator.setTarget(player, false);
-                    }
-
-                    if (role.equals("FIGHTER")) {
-                        boolean hasSword = false;
-                        if (inv != null) {
-                            for (ItemStack content : inv.getContents()) {
-                                if (content != null && content.getType().name().contains("SWORD")) {
-                                    hasSword = true;
-                                    break;
-                                }
+                        if (timeRemaining <= 0) {
+                            expireMercenary(uuid, npc.getId());
+                            continue;
+                        } else {
+                            try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET time_remaining=? WHERE player_uuid=?")) {
+                                updatePs.setLong(1, timeRemaining);
+                                updatePs.setString(2, uuid.toString());
+                                updatePs.executeUpdate();
                             }
                         }
 
-                        if (!hasSword) continue;
-
-                        LivingEntity target = null;
-                        for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
-                            if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
-                                if (entity.getLocation().distanceSquared(npc.getStoredLocation()) <= 64.0) {
-                                    target = (LivingEntity) entity;
-                                    break;
-                                }
+                        if (player != null && player.isOnline() && npc.isSpawned()) {
+                            if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) {
+                                npc.despawn();
+                                continue;
                             }
-                        }
 
-                        if (target != null) {
-                            navigator.setTarget(target, true);
-                            if (npc.getEntity() instanceof LivingEntity npcEntity && npcEntity.getLocation().distanceSquared(target.getLocation()) <= 4.0) {
-                                int level = getOrLoadLevel(uuid);
-                                double weaponBonus = 2.0;
+                            boolean isStaying = mercenaryStays.getOrDefault(uuid, false);
+                            Navigator navigator = npc.getNavigator();
+
+                            if (isStaying) {
+                                if (navigator.isNavigating()) navigator.cancelNavigation();
+                                continue;
+                            }
+
+                            Inventory inv = mercenaryInventories.get(uuid);
+
+                            // Seguir al jugador si está lejos
+                            if (!navigator.isNavigating() && player.getWorld().equals(npc.getStoredLocation().getWorld()) &&
+                                    player.getLocation().distanceSquared(npc.getStoredLocation()) > 16.0) {
+                                navigator.setTarget(player, false);
+                            }
+
+                            if (role.equals("FIGHTER")) {
+                                boolean hasSword = false;
                                 if (inv != null) {
-                                    ItemStack handItem = inv.getItem(0);
-                                    if (handItem != null && handItem.getType().name().contains("SWORD")) {
-                                        String type = handItem.getType().name();
-                                        if (type.contains("NETHERITE")) weaponBonus = 8.0;
-                                        else if (type.contains("DIAMOND")) weaponBonus = 7.0;
-                                        else if (type.contains("IRON")) weaponBonus = 6.0;
-                                        else if (type.contains("STONE")) weaponBonus = 5.0;
-                                        else weaponBonus = 4.0;
+                                    for (ItemStack content : inv.getContents()) {
+                                        if (content != null && content.getType().name().contains("SWORD")) {
+                                            hasSword = true;
+                                            break;
+                                        }
                                     }
                                 }
-                                target.damage(weaponBonus + (level * 1.0), npcEntity);
-                            }
-                        }
+                                if (!hasSword) continue;
 
-                    } else if (role.equals("MINER")) {
-                        boolean hasPickaxe = false;
-                        if (inv != null) {
-                            for (ItemStack content : inv.getContents()) {
-                                if (content != null && content.getType().name().contains("PICKAXE")) {
-                                    hasPickaxe = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!hasPickaxe) continue;
-
-                        Location npcLoc = npc.getStoredLocation();
-                        Block blockToMine = null;
-
-                        for (int x = -3; x <= 3; x++) {
-                            for (int y = -2; y <= 2; y++) {
-                                for (int z = -3; z <= 3; z++) {
-                                    Block b = npcLoc.clone().add(x, y, z).getBlock();
-                                    Material type = b.getType();
-                                    if (type.name().contains("ORE")) {
-                                        blockToMine = b;
-                                        break;
+                                LivingEntity target = null;
+                                for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
+                                    if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
+                                        if (entity.getLocation().distanceSquared(npc.getStoredLocation()) <= 64.0) {
+                                            target = (LivingEntity) entity;
+                                            break;
+                                        }
                                     }
                                 }
-                            }
-                        }
 
-                        if (blockToMine != null) {
-                            navigator.setTarget(blockToMine.getLocation());
-                            if (npcLoc.distanceSquared(blockToMine.getLocation()) <= 9.0) {
-                                Material minedType = blockToMine.getType();
-                                blockToMine.setType(Material.AIR);
-                                if (inv != null) {
-                                    inv.addItem(new ItemStack(minedType, 1));
-                                }
-                                addXpToMercenary(uuid, 5);
-                            }
-                        }
-
-                    } else if (role.equals("LUMBERJACK")) {
-                        boolean hasAxe = false;
-                        if (inv != null) {
-                            for (ItemStack content : inv.getContents()) {
-                                if (content != null && content.getType().name().contains("AXE") && !content.getType().name().contains("PICKAXE")) {
-                                    hasAxe = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (!hasAxe) continue;
-
-                        Location npcLoc = npc.getStoredLocation();
-                        Block blockToCut = null;
-
-                        for (int x = -3; x <= 3; x++) {
-                            for (int y = 0; y <= 4; y++) {
-                                for (int z = -3; z <= 3; z++) {
-                                    Block b = npcLoc.clone().add(x, y, z).getBlock();
-                                    Material type = b.getType();
-                                    if (type.name().contains("LOG") || type.name().contains("STEM")) {
-                                        blockToCut = b;
-                                        break;
+                                if (target != null) {
+                                    navigator.setTarget(target, true);
+                                    if (npc.getEntity() instanceof LivingEntity npcEntity && npcEntity.getLocation().distanceSquared(target.getLocation()) <= 4.0) {
+                                        int level = getOrLoadLevel(uuid);
+                                        double weaponBonus = 2.0;
+                                        if (inv != null) {
+                                            ItemStack handItem = inv.getItem(0);
+                                            if (handItem != null && handItem.getType().name().contains("SWORD")) {
+                                                String type = handItem.getType().name();
+                                                if (type.contains("NETHERITE")) weaponBonus = 8.0;
+                                                else if (type.contains("DIAMOND")) weaponBonus = 7.0;
+                                                else if (type.contains("IRON")) weaponBonus = 6.0;
+                                                else if (type.contains("STONE")) weaponBonus = 5.0;
+                                                else weaponBonus = 4.0;
+                                            }
+                                        }
+                                        target.damage(weaponBonus + (level * 1.0), npcEntity);
                                     }
                                 }
-                            }
-                        }
-
-                        if (blockToCut != null) {
-                            navigator.setTarget(blockToCut.getLocation());
-                            if (npcLoc.distanceSquared(blockToCut.getLocation()) <= 9.0) {
-                                Material cutType = blockToCut.getType();
-                                blockToCut.setType(Material.AIR);
+                            } else if (role.equals("MINER")) {
+                                boolean hasPickaxe = false;
                                 if (inv != null) {
-                                    inv.addItem(new ItemStack(cutType, 1));
+                                    for (ItemStack content : inv.getContents()) {
+                                        if (content != null && content.getType().name().contains("PICKAXE")) {
+                                            hasPickaxe = true;
+                                            break;
+                                        }
+                                    }
                                 }
-                                addXpToMercenary(uuid, 5);
+                                if (!hasPickaxe) continue;
+
+                                Location npcLoc = npc.getStoredLocation();
+                                Block blockToMine = null;
+                                for (int x = -3; x <= 3; x++) {
+                                    for (int y = -2; y <= 2; y++) {
+                                        for (int z = -3; z <= 3; z++) {
+                                            Block b = npcLoc.clone().add(x, y, z).getBlock();
+                                            if (b.getType().name().contains("ORE")) {
+                                                blockToMine = b;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (blockToMine != null) {
+                                    navigator.setTarget(blockToMine.getLocation());
+                                    if (npcLoc.distanceSquared(blockToMine.getLocation()) <= 9.0) {
+                                        Material minedType = blockToMine.getType();
+                                        blockToMine.setType(Material.AIR);
+                                        if (inv != null) inv.addItem(new ItemStack(minedType, 1));
+                                        addXpToMercenary(uuid, 5);
+                                    }
+                                }
+                            } else if (role.equals("LUMBERJACK")) {
+                                boolean hasAxe = false;
+                                if (inv != null) {
+                                    for (ItemStack content : inv.getContents()) {
+                                        if (content != null && content.getType().name().contains("AXE") && !content.getType().name().contains("PICKAXE")) {
+                                            hasAxe = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (!hasAxe) continue;
+
+                                Location npcLoc = npc.getStoredLocation();
+                                Block blockToCut = null;
+                                for (int x = -3; x <= 3; x++) {
+                                    for (int y = 0; y <= 4; y++) {
+                                        for (int z = -3; z <= 3; z++) {
+                                            Block b = npcLoc.clone().add(x, y, z).getBlock();
+                                            if (b.getType().name().contains("LOG") || b.getType().name().contains("STEM")) {
+                                                blockToCut = b;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (blockToCut != null) {
+                                    navigator.setTarget(blockToCut.getLocation());
+                                    if (npcLoc.distanceSquared(blockToCut.getLocation()) <= 9.0) {
+                                        Material cutType = blockToCut.getType();
+                                        blockToCut.setType(Material.AIR);
+                                        if (inv != null) inv.addItem(new ItemStack(cutType, 1));
+                                        addXpToMercenary(uuid, 5);
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            }
-        } catch (SQLException ignored) {}
+            } catch (SQLException ignored) {}
+        }
     }
 
     @EventHandler
@@ -876,19 +800,14 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         if (dead instanceof Monster) {
             Entity killer = dead.getKiller();
             if (killer == null) {
-                try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid, npc_id FROM mercenaries WHERE status='ACTIVE'");
-                     ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        UUID uuid = UUID.fromString(rs.getString("player_uuid"));
-                        NPC npc = CitizensAPI.getNPCRegistry().getById(rs.getInt("npc_id"));
-                        if (npc != null && npc.isSpawned() && npc.getStoredLocation().getWorld().equals(dead.getWorld())) {
-                            if (npc.getStoredLocation().distanceSquared(dead.getLocation()) <= 16.0) {
-                                addXpToMercenary(uuid, 20);
-                                break;
-                            }
+                for (NPC npc : CitizensAPI.getNPCRegistry()) {
+                    if (npc.data().has("owner") && npc.isSpawned() && npc.getStoredLocation().getWorld().equals(dead.getWorld())) {
+                        if (npc.getStoredLocation().distanceSquared(dead.getLocation()) <= 16.0) {
+                            addXpToMercenary(UUID.fromString(npc.data().getString("owner")), 20);
+                            break;
                         }
                     }
-                } catch (SQLException ignored) {}
+                }
             }
         }
     }
@@ -917,10 +836,8 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     }
 
     private void expireMercenary(UUID uuid, int npcId) {
-        if (npcId != -1) {
-            NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
-            if (npc != null) npc.destroy();
-        }
+        NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
+        if (npc != null) npc.destroy();
 
         try (PreparedStatement ps = database.prepareStatement("UPDATE mercenaries SET status='EXPIRED', time_remaining=0 WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
@@ -940,9 +857,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             message(player, "&cEl contrato de tu mercenario ha expirado.");
         }
     }
-
-    @EventHandler(ignoreCancelled = true)
-    public void onJoin(PlayerJoinEvent event) {}
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {

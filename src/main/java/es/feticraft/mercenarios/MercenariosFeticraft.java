@@ -538,31 +538,26 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
-    // Menú de gestión completo con selector de los 3 roles y botón de guardar en tótem
     private void openControlMenu(Player player) {
         Inventory gui = Bukkit.createInventory(null, 9, color("&8Gestión de Mercenario"));
 
         boolean isStaying = mercenaryStays.getOrDefault(player.getUniqueId(), false);
         String role = mercenaryRoles.getOrDefault(player.getUniqueId(), "FIGHTER");
 
-        // Slot 1: Seguir / Quieto
         ItemStack stayItem = new ItemStack(isStaying ? Material.RED_CONCRETE : Material.GREEN_CONCRETE);
         setItemMeta(stayItem, isStaying ? "&cEstado: Quieto" : "&aEstado: Siguiendo", "&7Haz clic para alternar el comportamiento.");
         gui.setItem(1, stayItem);
 
-        // Slot 3: Selector de Rol (Cicla entre FIGHTER -> MINER -> LUMBERJACK)
         Material roleMat = role.equals("MINER") ? Material.IRON_PICKAXE : (role.equals("LUMBERJACK") ? Material.IRON_AXE : Material.DIAMOND_SWORD);
         String roleName = role.equals("MINER") ? "Minero ⛏️" : (role.equals("LUMBERJACK") ? "Talador 🪓" : "Luchador ⚔️");
         ItemStack roleItem = new ItemStack(roleMat);
         setItemMeta(roleItem, "&bRol: " + roleName, "&7Clic para cambiar de trabajo.");
         gui.setItem(3, roleItem);
 
-        // Slot 5: Inventario y Armadura
         ItemStack gearItem = new ItemStack(Material.IRON_CHESTPLATE);
         setItemMeta(gearItem, "&eInventario y Armadura", "&7Haz clic para abrir su equipo y herramientas.");
         gui.setItem(5, gearItem);
 
-        // Slot 7: Guardar en Tótem
         ItemStack storeItem = new ItemStack(Material.TOTEM_OF_UNDYING);
         setItemMeta(storeItem, "&aGuardar en Tótem", "&7Devuelve el NPC a tu inventario y pausa el tiempo.");
         gui.setItem(7, storeItem);
@@ -589,13 +584,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
             int slot = event.getSlot();
             if (slot == 2) {
-                processHire(player, 3600L, 2000.0);       // 1 Hora
+                processHire(player, 3600L, 2000.0);
             } else if (slot == 4) {
-                processHire(player, 21600L, 10000.0);     // 6 Horas
+                processHire(player, 21600L, 10000.0);
             } else if (slot == 6) {
-                processHire(player, 43200L, 18000.0);     // 12 Horas
+                processHire(player, 43200L, 18000.0);
             } else if (slot == 8) {
-                processHire(player, 86400L, 30000.0);     // 24 Horas
+                processHire(player, 86400L, 30000.0);
             }
             return;
         }
@@ -621,7 +616,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 }
                 player.closeInventory();
             } else if (event.getSlot() == 3) {
-                // Cambiar Rol de forma cíclica: FIGHTER -> MINER -> LUMBERJACK -> FIGHTER
                 String currentRole = mercenaryRoles.getOrDefault(uuid, "FIGHTER");
                 String newRole = "FIGHTER";
                 if (currentRole.equals("FIGHTER")) newRole = "MINER";
@@ -656,7 +650,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
-    // IA Principal: Valida herramientas obligatorias para cada trabajo y ejecuta la acción correspondiente
     private void processMercenaryAIAndTimers() {
         long now = System.currentTimeMillis();
 
@@ -664,7 +657,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             UUID uuid = entry.getKey();
             int npcId = entry.getValue();
 
-            // Descontar 1 segundo del tiempo restante en la base de datos (solo si está activo en el mundo)
             try (PreparedStatement ps = database.prepareStatement("SELECT time_remaining FROM mercenaries WHERE player_uuid=? AND status='ACTIVE'")) {
                 ps.setString(1, uuid.toString());
                 try (ResultSet rs = ps.executeQuery()) {
@@ -713,7 +705,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 Inventory inv = mercenaryInventories.get(uuid);
 
                 if (role.equals("FIGHTER")) {
-                    // MODO LUCHADOR: Requiere obligatoriamente una espada en el inventario
                     boolean hasSword = false;
                     if (inv != null) {
                         for (ItemStack content : inv.getContents()) {
@@ -724,10 +715,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
                     }
 
-                    if (!hasSword) {
-                        // Sin espada no combate
-                        continue;
-                    }
+                    if (!hasSword) continue;
 
                     LivingEntity target = null;
                     for (Entity entity : npc.getStoredLocation().getWorld().getEntities()) {
@@ -765,7 +753,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
 
                 } else if (role.equals("MINER")) {
-                    // MODO MINERO: Requiere obligatoriamente un pico en el inventario
                     boolean hasPickaxe = false;
                     if (inv != null) {
                         for (ItemStack content : inv.getContents()) {
@@ -795,7 +782,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
 
                     if (blockToMine != null) {
-                        navigator.setTarget(blockToMine.getLocation(), false);
+                        navigator.setTarget(blockToMine.getLocation()); // CORREGIDO AQUÍ
                         if (npcLoc.distanceSquared(blockToMine.getLocation()) <= 9.0) {
                             Material minedType = blockToMine.getType();
                             blockToMine.setType(Material.AIR);
@@ -812,7 +799,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
 
                 } else if (role.equals("LUMBERJACK")) {
-                    // MODO TALADOR: Requiere obligatoriamente un hacha en el inventario
                     boolean hasAxe = false;
                     if (inv != null) {
                         for (ItemStack content : inv.getContents()) {
@@ -842,7 +828,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
 
                     if (blockToCut != null) {
-                        navigator.setTarget(blockToCut.getLocation(), false);
+                        navigator.setTarget(blockToCut.getLocation()); // CORREGIDO AQUÍ
                         if (npcLoc.distanceSquared(blockToCut.getLocation()) <= 9.0) {
                             Material cutType = blockToCut.getType();
                             blockToCut.setType(Material.AIR);
@@ -931,9 +917,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     }
 
     @EventHandler(ignoreCancelled = true)
-    public void onJoin(PlayerJoinEvent event) {
-        // Al entrar el jugador no auto-invocamos, se queda guardado en su tótem o pendiente en base de datos de forma segura
-    }
+    public void onJoin(PlayerJoinEvent event) {}
 
     @EventHandler
     public void onQuit(PlayerQuitEvent event) {

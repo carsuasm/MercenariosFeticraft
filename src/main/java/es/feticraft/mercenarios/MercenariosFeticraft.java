@@ -351,7 +351,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         } catch (Exception ignored) {}
                     }
 
-                    // Serializar y guardar el inventario actual en la base de datos antes de limpiar
                     Inventory inv = mercenaryInventories.get(uuid);
                     String serializedInv = inv != null ? inventoryToString(inv) : null;
 
@@ -416,7 +415,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         } catch (Exception ignored) {}
                     }
 
-                    // Restaurar inventario guardado en la base de datos si existe
                     if (serializedInv != null && !serializedInv.isEmpty()) {
                         mercenaryInventories.put(uuid, stringToInventory(serializedInv, color("&8Equipo de " + player.getName())));
                     }
@@ -842,7 +840,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         continue;
                     }
 
-                    // --- ROLE: MINER (Minero con mayor rango y capacidad de romper piedra/tierra si cubren minerales) ---
+                    // --- ROLE: MINER ---
                     if (role.equals("MINER")) {
                         boolean hasPickaxe = false;
                         if (inv != null) {
@@ -897,7 +895,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             if (npcLoc.distanceSquared(targetBlock.getLocation()) <= 12.0) {
                                 int progress = miningProgress.getOrDefault(uuid, 0) + 1;
                                 
-                                targetBlock.getWorld().spawnParticle(org.bukkit.Particle.BLOCK, targetBlock.getLocation().add(0.5, 0.5, 0.5), 10, targetBlock.getBlockData());
+                                targetBlock.getWorld().spawnParticle(org.bukkit.Particle.BLOCK, targetBlock.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0, targetBlock.getBlockData());
                                 targetBlock.getWorld().playSound(targetBlock.getLocation(), targetBlock.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
 
                                 if (progress >= 3) {
@@ -914,7 +912,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             }
                         }
                     } 
-                    // --- ROLE: LUMBERJACK (Talador ampliado a cualquier tipo de árbol y mayor rango) ---
+                    // --- ROLE: LUMBERJACK ---
                     else if (role.equals("LUMBERJACK")) {
                         boolean hasAxe = false;
                         if (inv != null) {
@@ -950,7 +948,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             if (npcLoc.distanceSquared(blockToCut.getLocation()) <= 16.0) {
                                 int progress = miningProgress.getOrDefault(uuid, 0) + 1;
 
-                                blockToCut.getWorld().spawnParticle(org.bukkit.Particle.BLOCK, blockToCut.getLocation().add(0.5, 0.5, 0.5), 10, blockToCut.getBlockData());
+                                blockToCut.getWorld().spawnParticle(org.bukkit.Particle.BLOCK, blockToCut.getLocation().add(0.5, 0.5, 0.5), 10, 0.2, 0.2, 0.2, 0.0, blockToCut.getBlockData());
                                 blockToCut.getWorld().playSound(blockToCut.getLocation(), blockToCut.getBlockData().getSoundGroup().getHitSound(), 0.5f, 0.8f);
 
                                 if (progress >= 3) {
@@ -985,7 +983,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         return false;
     }
 
-    // Métodos de serialización de inventario para que NUNCA se pierdan los ítems
     private String inventoryToString(Inventory inventory) {
         try {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();

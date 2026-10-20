@@ -220,12 +220,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
         } catch (SQLException ignored) {}
 
+        double price = getConfig().getDouble("hire-price", 25000.0);
+        long duration = getConfig().getLong("hire-duration-seconds", 86400L);
+
         Inventory gui = Bukkit.createInventory(null, 9, color("&8Contratar Mercenario"));
 
-        gui.setItem(2, createGuiItem(Material.CLOCK, "&e1 Hora de Contrato", 3600L, 2000.0));
-        gui.setItem(4, createGuiItem(Material.GOLD_INGOT, "&e6 Horas de Contrato", 21600L, 10000.0));
-        gui.setItem(6, createGuiItem(Material.EMERALD, "&e12 Horas de Contrato", 43200L, 18000.0));
-        gui.setItem(8, createGuiItem(Material.NETHER_STAR, "&e24 Horas de Contrato", 86400L, 30000.0));
+        long hours = duration / 3600;
+        gui.setItem(4, createGuiItem(Material.TOTEM_OF_UNDYING, "&eContrato de Mercenario (" + hours + "h)", duration, price));
 
         player.openInventory(gui);
     }
@@ -685,10 +686,11 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             if (!(event.getWhoClicked() instanceof Player player)) return;
 
             int slot = event.getSlot();
-            if (slot == 2) processHire(player, 3600L, 2000.0);
-            else if (slot == 4) processHire(player, 21600L, 10000.0);
-            else if (slot == 6) processHire(player, 43200L, 18000.0);
-            else if (slot == 8) processHire(player, 86400L, 30000.0);
+            if (slot == 4) {
+                long duration = getConfig().getLong("hire-duration-seconds", 86400L);
+                double price = getConfig().getDouble("hire-price", 25000.0);
+                processHire(player, duration, price);
+            }
             return;
         }
 
@@ -762,7 +764,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
     }
 
-    // --- BUCLE DE IA: RANGO DE 8 BLOQUES OPTIMIZADO CON ALCANCE DIRECTO ---
     private void processMercenaryAIAndTimers() {
         try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid, npc_id, time_remaining, role FROM mercenaries WHERE status='ACTIVE'");
              ResultSet rs = ps.executeQuery()) {
@@ -809,7 +810,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     Location npcLoc = npc.getStoredLocation();
                     Location playerLoc = player.getLocation();
 
-                    // Teletransporte si está muy lejos (> 25 bloques)
                     if (!playerLoc.getWorld().equals(npcLoc.getWorld()) || playerLoc.distanceSquared(npcLoc) > 625.0) {
                         npc.teleport(playerLoc, org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN);
                         continue;
@@ -817,7 +817,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     double distanceToPlayerSq = playerLoc.distanceSquared(npcLoc);
 
-                    // 1. PRIORIDAD 1: SI EL JUGADOR SE ALEJA MÁS DE 8 BLOQUES, SEGUIRLO INMEDIATAMENTE
                     if (distanceToPlayerSq > 64.0) {
                         navigator.setTarget(player, false);
                         continue;
@@ -825,7 +824,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     Inventory inv = mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
 
-                    // 2. PRIORIDAD 2: COMBATIR ENEMIGOS CERCANOS (< 5 bloques)
                     LivingEntity targetMonster = null;
                     for (Entity entity : npcLoc.getWorld().getEntities()) {
                         if (entity instanceof Monster && !(entity.hasMetadata("NPC"))) {
@@ -857,7 +855,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         continue;
                     }
 
-                    // 3. PRIORIDAD 3: TRABAJO CON ALCANCE AMPLIADO A 8 BLOQUES (Sin rutas que bloqueen)
                     if (role.equals("MINER")) {
                         boolean hasPickaxe = false;
                         if (inv != null) {
@@ -936,7 +933,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
                     }
 
-                    // 4. MANTENERSE JUNTO AL JUGADOR
                     if (distanceToPlayerSq > 9.0 && !navigator.isNavigating()) {
                         navigator.setTarget(player, false);
                     }

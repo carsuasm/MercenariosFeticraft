@@ -1,0 +1,13 @@
+name: MercenariosFeticraft
+version: 1.0-SNAPSHOT
+main: es.feticraft.mercenarios.MercenariosFeticraft
+api-version: 1.20
+depend: [Citizens, Vault]
+commands:
+  mercenario:
+    description: Comando principal de mercenarios
+    permission: mercenarios.use
+    usage: /mercenario <contratar>
+permissions:
+  mercenarios.use:
+    default: true

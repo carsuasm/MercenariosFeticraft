@@ -2,7 +2,6 @@ package es.feticraft.mercenarios;
 
 import net.citizensnpcs.api.CitizensAPI;
 import net.citizensnpcs.api.ai.Navigator;
-import net.citizensnpcs.api.event.NPCClickEvent;
 import net.citizensnpcs.api.npc.NPC;
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.Bukkit;
@@ -19,6 +18,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
@@ -48,7 +48,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     private static final double HIRE_PRICE = 500.0;
     private static final long HIRE_DURATION_SECONDS = 86400L; // 24 horas
     
-    // Cambia esto si tu mundo de survival se llama diferente
     private static final String SURVIVAL_WORLD_NAME = "world";
 
     @Override
@@ -128,7 +127,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         message(player, "&eUso de comandos:");
         message(player, "&f/mercenario contratar &7- Contrata un mercenario");
         message(player, "&f/mercenario tiempo &7- Muestra el tiempo restante");
-        message(player, "&f/mercenario reaparecer &7- Vuelve a hacer aparecer a tu mercenario si se borró");
+        message(player, "&f/mercenario reaparecer &7- Vuelve a hacer aparecer a tu mercenario");
         return true;
     }
 
@@ -140,7 +139,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             return;
         }
 
-        // Comprobar si tiene contrato activo y si el NPC realmente existe físicamente
         try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, expires_at, status FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
@@ -155,7 +153,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             message(player, "&cYa tienes un mercenario activo. Usa &e/mercenario reaparecer &csi no lo ves.");
                             return;
                         } else {
-                            // Si el contrato sigue vigente pero el NPC fue borrado con /npc remove, lo limpiamos para permitir contratar uno nuevo o revivirló
                             try (PreparedStatement delPs = database.prepareStatement("UPDATE mercenaries SET status='EXPIRED' WHERE player_uuid=?")) {
                                 delPs.setString(1, uuid.toString());
                                 delPs.executeUpdate();
@@ -246,11 +243,9 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                             oldNpc.destroy();
                         }
 
-                        // Crear un nuevo NPC en la posición actual del jugador
                         NPC newNpc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario de " + player.getName()));
                         newNpc.spawn(player.getLocation());
 
-                        // Actualizar ID en base de datos
                         try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=? WHERE player_uuid=?")) {
                             updatePs.setInt(1, newNpc.getId());
                             updatePs.setString(2, uuid.toString());
@@ -269,14 +264,21 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         message(player, "&cNo tienes ningún contrato activo para reaparecer.");
     }
 
+    // --- NUEVO: Usamos PlayerInteractEntityEvent para asegurar que detecte el clic al NPC ---
     @EventHandler
-    public void onNPCClick(NPCClickEvent event) {
-        Player player = event.getClicker();
-        NPC npc = event.getNPC();
-        UUID uuid = player.getUniqueId();
+    public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
+        Player player = event.getPlayer();
+        Entity clicked = event.getRightClicked();
 
+        // Comprobamos si la entidad clicada es un NPC de Citizens
+        if (!CitizensAPI.getNPCRegistry().isNPC(clicked)) {
+            return;
+        }
+
+        NPC npc = CitizensAPI.getNPCRegistry().getNPC(clicked);
+        UUID uuid = player.getUniqueId();
         boolean isOwner = false;
-        
+
         if (activeMercenaries.containsKey(uuid) && activeMercenaries.get(uuid) == npc.getId()) {
             isOwner = true;
         } else {

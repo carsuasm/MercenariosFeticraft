@@ -220,13 +220,22 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
         } catch (SQLException ignored) {}
 
-        double price = getConfig().getDouble("hire-price", 25000.0);
-        long duration = getConfig().getLong("hire-duration-seconds", 86400L);
+        double price1h = getConfig().getDouble("price-1h", 20000.0);
+        double price6h = getConfig().getDouble("price-6h", 90000.0);
+        double price12h = getConfig().getDouble("price-12h", 160000.0);
+        double price24h = getConfig().getDouble("price-24h", 280000.0);
+
+        long dur1h = getConfig().getLong("duration-1h", 3600L);
+        long dur6h = getConfig().getLong("duration-6h", 21600L);
+        long dur12h = getConfig().getLong("duration-12h", 43200L);
+        long dur24h = getConfig().getLong("duration-24h", 86400L);
 
         Inventory gui = Bukkit.createInventory(null, 9, color("&8Contratar Mercenario"));
 
-        long hours = duration / 3600;
-        gui.setItem(4, createGuiItem(Material.TOTEM_OF_UNDYING, "&eContrato de Mercenario (" + hours + "h)", duration, price));
+        gui.setItem(1, createGuiItem(Material.CLOCK, "&e1 Hora de Contrato", dur1h, price1h));
+        gui.setItem(3, createGuiItem(Material.GOLD_INGOT, "&e6 Horas de Contrato", dur6h, price6h));
+        gui.setItem(5, createGuiItem(Material.EMERALD, "&e12 Horas de Contrato", dur12h, price12h));
+        gui.setItem(7, createGuiItem(Material.NETHER_STAR, "&e24 Horas de Contrato", dur24h, price24h));
 
         player.openInventory(gui);
     }
@@ -460,7 +469,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             updatePs.executeUpdate();
         } catch (SQLException ignored) {}
 
-        mercenaryStays.put(uuid, false);
+        mercenaryStays.remove(uuid);
         mercenaryRoles.put(uuid, "FIGHTER");
         mercenaryInventories.computeIfAbsent(uuid, k -> Bukkit.createInventory(null, 27, color("&8Equipo de " + player.getName())));
         mercenaryLevels.put(uuid, 1);
@@ -686,10 +695,22 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             if (!(event.getWhoClicked() instanceof Player player)) return;
 
             int slot = event.getSlot();
-            if (slot == 4) {
-                long duration = getConfig().getLong("hire-duration-seconds", 86400L);
-                double price = getConfig().getDouble("hire-price", 25000.0);
-                processHire(player, duration, price);
+            if (slot == 1) {
+                long dur = getConfig().getLong("duration-1h", 3600L);
+                double price = getConfig().getDouble("price-1h", 20000.0);
+                processHire(player, dur, price);
+            } else if (slot == 3) {
+                long dur = getConfig().getLong("duration-6h", 21600L);
+                double price = getConfig().getDouble("price-6h", 90000.0);
+                processHire(player, dur, price);
+            } else if (slot == 5) {
+                long dur = getConfig().getLong("duration-12h", 43200L);
+                double price = getConfig().getDouble("price-12h", 160000.0);
+                processHire(player, dur, price);
+            } else if (slot == 7) {
+                long dur = getConfig().getLong("duration-24h", 86400L);
+                double price = getConfig().getDouble("price-24h", 280000.0);
+                processHire(player, dur, price);
             }
             return;
         }

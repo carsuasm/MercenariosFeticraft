@@ -60,7 +60,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     private final Map<UUID, Integer> mercenaryLevels = new HashMap<>();
     private final Map<UUID, Integer> mercenaryXp = new HashMap<>();
     private final Map<UUID, Long> clickCooldown = new HashMap<>();
-    private final Map<Integer, UUID> npcToOwner = new HashMap<>();
 
     private String survivalWorldName;
 
@@ -79,7 +78,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         }
 
         if (Bukkit.getPluginManager().getPlugin("Citizens") == null) {
-            getLogger().severe("¡Citizens no está instalado! El plugin se deshabilitará.");
+            getLogger().severe("¡Citizens não está instalado! El plugin se deshabilitará.");
             Bukkit.getPluginManager().disablePlugin(this);
             return;
         }
@@ -114,6 +113,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             try (Statement st = database.createStatement()) {
                 st.execute("PRAGMA foreign_keys=ON");
                 st.execute("CREATE TABLE IF NOT EXISTS mercenaries (player_uuid TEXT PRIMARY KEY, player_name TEXT NOT NULL, npc_id INTEGER NOT NULL, time_remaining INTEGER NOT NULL, status TEXT NOT NULL, level INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, role TEXT DEFAULT 'FIGHTER')");
+                
+                // Asegurar columnas por si la tabla ya existía de versiones anteriores
+                try { st.execute("ALTER TABLE mercenaries ADD COLUMN time_remaining INTEGER DEFAULT 0;"); } catch (SQLException ignored) {}
+                try { st.execute("ALTER TABLE mercenaries ADD COLUMN status TEXT DEFAULT 'PENDING';"); } catch (SQLException ignored) {}
+                try { st.execute("ALTER TABLE mercenaries ADD COLUMN level INTEGER DEFAULT 1;"); } catch (SQLException ignored) {}
+                try { st.execute("ALTER TABLE mercenaries ADD COLUMN xp INTEGER DEFAULT 0;"); } catch (SQLException ignored) {}
+                try { st.execute("ALTER TABLE mercenaries ADD COLUMN role TEXT DEFAULT 'FIGHTER';"); } catch (SQLException ignored) {}
             }
             return true;
         } catch (Exception e) {
@@ -261,14 +267,11 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     }
 
     private UUID getOwnerByNpcId(int npcId) {
-        if (npcToOwner.containsKey(npcId)) return npcToOwner.get(npcId);
         try (PreparedStatement ps = database.prepareStatement("SELECT player_uuid FROM mercenaries WHERE npc_id=? AND status='ACTIVE'")) {
             ps.setInt(1, npcId);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    UUID uuid = UUID.fromString(rs.getString("player_uuid"));
-                    npcToOwner.put(npcId, uuid);
-                    return uuid;
+                    return UUID.fromString(rs.getString("player_uuid"));
                 }
             }
         } catch (SQLException ignored) {}
@@ -283,9 +286,10 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                 if (rs.next()) {
                     int npcId = rs.getInt("npc_id");
                     if (npcId != -1) {
-                        NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
-                        if (npc != null) npc.destroy();
-                        npcToOwner.remove(npcId);
+                        try {
+                            NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
+                            if (npc != null) npc.destroy();
+                        } catch (Exception ignored) {}
                     }
                 }
             }
@@ -308,19 +312,26 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     private void storeMercenaryToItem(Player player) {
         UUID uuid = player.getUniqueId();
 
-        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, time_remaining FROM mercenaries WHERE player_uuid=? AND status='ACTIVE'")) {
+        try (PreparedStatement ps = database.prepareStatement("SELECT npc_id, time_remaining, status FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, uuid.toString());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
+                    String status = rs.getString("status");
                     int activeNpcId = rs.getInt("npc_id");
                     long timeRemaining = rs.getLong("time_remaining");
 
+                    if (!status.equalsIgnoreCase("ACTIVE") && activeNpcId == -1) {
+                        message(player, "&cNo tienes ningún mercenario activo en el mundo para guardar.");
+                        return;
+                    }
+
                     if (activeNpcId != -1) {
-                        NPC npc = CitizensAPI.getNPCRegistry().getById(activeNpcId);
-                        if (npc != null) {
-                            npc.destroy();
-                        }
-                        npcToOwner.remove(activeNpcId);
+                        try {
+                            NPC npc = CitizensAPI.getNPCRegistry().getById(activeNpcId);
+                            if (npc != null) {
+                                npc.destroy();
+                            }
+                        } catch (Exception ignored) {}
                     }
 
                     ItemStack totem = createSummonTotem(timeRemaining);
@@ -342,7 +353,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             getLogger().severe("Error al guardar mercenario: " + e.getMessage());
         }
 
-        message(player, "&cNo tienes ningún mercenario activo en el mundo para guardar.");
+        message(player, "&cNo tienes ningún contrato de mercenario registrado.");
     }
 
     @EventHandler
@@ -371,12 +382,14 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     String status = rs.getString("status");
                     int existingNpcId = rs.getInt("npc_id");
 
-                    if (status.equalsIgnoreCase("ACTIVE")) {
-                        NPC checkNpc = CitizensAPI.getNPCRegistry().getById(existingNpcId);
-                        if (checkNpc != null) {
-                            message(player, "&cYa tienes un mercenario activo en el mundo.");
-                            return;
-                        }
+                    if (status.equalsIgnoreCase("ACTIVE") && existingNpcId != -1) {
+                        try {
+                            NPC checkNpc = CitizensAPI.getNPCRegistry().getById(existingNpcId);
+                            if (checkNpc != null) {
+                                message(player, "&cYa tienes un mercenario activo en el mundo.");
+                                return;
+                            }
+                        } catch (Exception ignored) {}
                     }
                 }
             }
@@ -397,7 +410,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         npc.spawn(loc);
 
         int npcId = npc.getId();
-        npcToOwner.put(npcId, uuid);
 
         try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=?, status='ACTIVE', time_remaining=? WHERE player_uuid=?")) {
             updatePs.setInt(1, npcId);
@@ -493,18 +505,18 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     if (status.equalsIgnoreCase("ACTIVE") && timeRemaining > 0) {
                         if (oldNpcId != -1) {
-                            NPC oldNpc = CitizensAPI.getNPCRegistry().getById(oldNpcId);
-                            if (oldNpc != null) {
-                                oldNpc.destroy();
-                            }
-                            npcToOwner.remove(oldNpcId);
+                            try {
+                                NPC oldNpc = CitizensAPI.getNPCRegistry().getById(oldNpcId);
+                                if (oldNpc != null) {
+                                    oldNpc.destroy();
+                                }
+                            } catch (Exception ignored) {}
                         }
 
                         NPC newNpc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario de " + player.getName()));
                         newNpc.spawn(player.getLocation());
 
                         int newId = newNpc.getId();
-                        npcToOwner.put(newId, uuid);
 
                         try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=? WHERE player_uuid=?")) {
                             updatePs.setInt(1, newId);
@@ -589,29 +601,24 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
             }
         } catch (SQLException ignored) {}
 
-        // Slot 0: Indicador de Nivel y XP
         ItemStack levelItem = new ItemStack(Material.EXPERIENCE_BOTTLE);
         setItemMeta(levelItem, "&aNivel " + level, "&7Experiencia: &e" + xp + "/100 XP");
         gui.setItem(0, levelItem);
 
-        // Slot 2: Seguir / Quieto
         ItemStack stayItem = new ItemStack(isStaying ? Material.RED_CONCRETE : Material.GREEN_CONCRETE);
         setItemMeta(stayItem, isStaying ? "&cEstado: Quieto" : "&aEstado: Siguiendo", "&7Haz clic para alternar el comportamiento.");
         gui.setItem(2, stayItem);
 
-        // Slot 4: Selector de Rol
         Material roleMat = role.equals("MINER") ? Material.IRON_PICKAXE : (role.equals("LUMBERJACK") ? Material.IRON_AXE : Material.DIAMOND_SWORD);
         String roleName = role.equals("MINER") ? "Minero ⛏️" : (role.equals("LUMBERJACK") ? "Talador 🪓" : "Luchador ⚔️");
         ItemStack roleItem = new ItemStack(roleMat);
         setItemMeta(roleItem, "&bRol: " + roleName, "&7Clic para cambiar de trabajo.");
         gui.setItem(4, roleItem);
 
-        // Slot 6: Inventario y Armadura
         ItemStack gearItem = new ItemStack(Material.IRON_CHESTPLATE);
         setItemMeta(gearItem, "&eInventario y Armadura", "&7Haz clic para abrir su equipo y herramientas.");
         gui.setItem(6, gearItem);
 
-        // Slot 8: Guardar en Tótem
         ItemStack storeItem = new ItemStack(Material.TOTEM_OF_UNDYING);
         setItemMeta(storeItem, "&aGuardar en Tótem", "&7Devuelve el NPC a tu inventario y pausa el tiempo.");
         gui.setItem(8, storeItem);
@@ -659,14 +666,18 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     try (ResultSet rs = ps.executeQuery()) {
                         if (rs.next()) {
                             int npcId = rs.getInt("npc_id");
-                            NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
-                            if (npc != null && npc.isSpawned()) {
-                                if (newStay) {
-                                    message(player, "&eTu mercenario se ha quedado &fquieto&e.");
-                                    npc.getNavigator().cancelNavigation();
-                                } else {
-                                    message(player, "&aTu mercenario ha vuelto a &fseguirte&a.");
-                                }
+                            if (npcId != -1) {
+                                try {
+                                    NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
+                                    if (npc != null && npc.isSpawned()) {
+                                        if (newStay) {
+                                            message(player, "&eTu mercenario se ha quedado &fquieto&e.");
+                                            npc.getNavigator().cancelNavigation();
+                                        } else {
+                                            message(player, "&aTu mercenario ha vuelto a &fseguirte&a.");
+                                        }
+                                    }
+                                } catch (Exception ignored) {}
                             }
                         }
                     }
@@ -731,8 +742,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                     }
                 }
 
+                if (npcId == -1) continue;
+
                 Player player = Bukkit.getPlayer(uuid);
-                NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
+                NPC npc = null;
+                try {
+                    npc = CitizensAPI.getNPCRegistry().getById(npcId);
+                } catch (Exception ignored) {}
 
                 if (player != null && player.isOnline() && npc != null) {
                     if (!player.getWorld().getName().equalsIgnoreCase(survivalWorldName)) {
@@ -756,9 +772,13 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     Inventory inv = mercenaryInventories.get(uuid);
 
-                    if (!navigator.isNavigating() && player.getWorld().equals(npc.getStoredLocation().getWorld()) &&
-                            player.getLocation().distanceSquared(npc.getStoredLocation()) > 16.0) {
-                        navigator.setTarget(player, false);
+                    if (player.getWorld().equals(npc.getStoredLocation().getWorld())) {
+                        double distanceSq = player.getLocation().distanceSquared(npc.getStoredLocation());
+                        if (distanceSq > 16.0 && !navigator.isNavigating()) {
+                            navigator.setTarget(player, false);
+                        } else if (distanceSq > 100.0) {
+                            npc.teleport(player.getLocation(), org.bukkit.event.player.PlayerTeleportEvent.TeleportCause.PLUGIN);
+                        }
                     }
 
                     if (role.equals("FIGHTER")) {
@@ -890,13 +910,17 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                      ResultSet rs = ps.executeQuery()) {
                     while (rs.next()) {
                         UUID uuid = UUID.fromString(rs.getString("player_uuid"));
-                        NPC npc = CitizensAPI.getNPCRegistry().getById(rs.getInt("npc_id"));
-                        if (npc != null && npc.isSpawned() && npc.getStoredLocation().getWorld().equals(dead.getWorld())) {
-                            if (npc.getStoredLocation().distanceSquared(dead.getLocation()) <= 16.0) {
-                                addXpToMercenary(uuid, 20);
-                                break;
+                        int npcId = rs.getInt("npc_id");
+                        if (npcId == -1) continue;
+                        try {
+                            NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
+                            if (npc != null && npc.isSpawned() && npc.getStoredLocation().getWorld().equals(dead.getWorld())) {
+                                if (npc.getStoredLocation().distanceSquared(dead.getLocation()) <= 16.0) {
+                                    addXpToMercenary(uuid, 20);
+                                    break;
+                                }
                             }
-                        }
+                        } catch (Exception ignored) {}
                     }
                 } catch (SQLException ignored) {}
             }
@@ -921,16 +945,17 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         try (PreparedStatement ps = database.prepareStatement("UPDATE mercenaries SET level=?, xp=? WHERE player_uuid=?")) {
             ps.setInt(1, currentLevel);
             ps.setInt(2, currentXp);
-            ps.setString(1, uuid.toString()); // Corregido índice para SQLite
+            ps.setString(3, uuid.toString());
             ps.executeUpdate();
         } catch (SQLException ignored) {}
     }
 
     private void expireMercenary(UUID uuid, int npcId) {
         if (npcId != -1) {
-            NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
-            if (npc != null) npc.destroy();
-            npcToOwner.remove(npcId);
+            try {
+                NPC npc = CitizensAPI.getNPCRegistry().getById(npcId);
+                if (npc != null) npc.destroy();
+            } catch (Exception ignored) {}
         }
 
         try (PreparedStatement ps = database.prepareStatement("UPDATE mercenaries SET status='EXPIRED', time_remaining=0 WHERE player_uuid=?")) {

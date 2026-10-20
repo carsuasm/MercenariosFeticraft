@@ -56,7 +56,7 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
     private NamespacedKey timeLeftKey;
     
     private final Map<UUID, Boolean> mercenaryStays = new HashMap<>(); 
-    private final Map<UUID, String> mercenaryRoles = new HashMap<>(); // "FIGHTER", "MINER", "LUMBERJACK"
+    private final Map<UUID, String> mercenaryRoles = new HashMap<>(); 
     private final Map<UUID, Inventory> mercenaryInventories = new HashMap<>(); 
     private final Map<UUID, Integer> mercenaryLevels = new HashMap<>();
     private final Map<UUID, Integer> mercenaryXp = new HashMap<>();
@@ -469,8 +469,9 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                         }
 
                         int level = getOrLoadLevel(uuid);
+                        Location spawnLoc = player.getLocation();
                         NPC newNpc = CitizensAPI.getNPCRegistry().createNPC(EntityType.PLAYER, color("&aMercenario Nivel " + level + " de " + player.getName()));
-                        newNpc.spawn(player.getLocation());
+                        newNpc.spawn(spawnLoc);
 
                         try (PreparedStatement updatePs = database.prepareStatement("UPDATE mercenaries SET npc_id=? WHERE player_uuid=?")) {
                             updatePs.setInt(1, newNpc.getId());
@@ -520,7 +521,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         NPC npc = CitizensAPI.getNPCRegistry().getNPC(clicked);
         boolean isOwner = false;
 
-        // Comprobación directa en base de datos para saber si el NPC pertenece a este jugador
         try (PreparedStatement ps = database.prepareStatement("SELECT 1 FROM mercenaries WHERE player_uuid=? AND npc_id=? AND status='ACTIVE'")) {
             ps.setString(1, uuid.toString());
             ps.setInt(2, npc.getId());
@@ -551,7 +551,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
         boolean isStaying = mercenaryStays.getOrDefault(player.getUniqueId(), false);
         String role = mercenaryRoles.getOrDefault(player.getUniqueId(), "FIGHTER");
 
-        // Cargar rol desde base de datos si no está en memoria
         try (PreparedStatement ps = database.prepareStatement("SELECT role FROM mercenaries WHERE player_uuid=?")) {
             ps.setString(1, player.getUniqueId().toString());
             try (ResultSet rs = ps.executeQuery()) {
@@ -733,6 +732,12 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
 
                     Inventory inv = mercenaryInventories.get(uuid);
 
+                    // Si no está quieto y no está ocupado con un objetivo, aseguramos que siga al jugador suavemente
+                    if (!navigator.isNavigating() && player.getWorld().equals(npc.getStoredLocation().getWorld()) &&
+                            player.getLocation().distanceSquared(npc.getStoredLocation()) > 16.0) {
+                        navigator.setTarget(player, false);
+                    }
+
                     if (role.equals("FIGHTER")) {
                         boolean hasSword = false;
                         if (inv != null) {
@@ -773,11 +778,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                                     }
                                 }
                                 target.damage(weaponBonus + (level * 1.0), npcEntity);
-                            }
-                        } else {
-                            if (player.getWorld().equals(npc.getStoredLocation().getWorld()) &&
-                                    player.getLocation().distanceSquared(npc.getStoredLocation()) > 16.0) {
-                                navigator.setTarget(player, false);
                             }
                         }
 
@@ -820,11 +820,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                                 }
                                 addXpToMercenary(uuid, 5);
                             }
-                        } else {
-                            if (player.getWorld().equals(npcLoc.getWorld()) &&
-                                    player.getLocation().distanceSquared(npcLoc) > 16.0) {
-                                navigator.setTarget(player, false);
-                            }
                         }
 
                     } else if (role.equals("LUMBERJACK")) {
@@ -865,11 +860,6 @@ public final class MercenariosFeticraft extends JavaPlugin implements Listener, 
                                     inv.addItem(new ItemStack(cutType, 1));
                                 }
                                 addXpToMercenary(uuid, 5);
-                            }
-                        } else {
-                            if (player.getWorld().equals(npcLoc.getWorld()) &&
-                                    player.getLocation().distanceSquared(npcLoc) > 16.0) {
-                                navigator.setTarget(player, false);
                             }
                         }
                     }
